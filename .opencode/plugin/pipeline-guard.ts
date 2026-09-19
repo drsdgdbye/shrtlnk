@@ -1,7 +1,17 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 
 const ROLES = ["lead", "architect", "developer", "reviewer"] as const
@@ -24,6 +34,9 @@ const ROUTE_SIGNALS: Array<{ route: string; re: RegExp }> = [
   { route: "assisted", re: /(\/assisted\b|правку вн[её]с сам|правлю сам|я поправлю|без разработчика|сам исправлю|сам внесу)/i },
 ]
 const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
+const VERDICT_FILE = /^T-\d{8}-[A-Za-z0-9-]+-a\d+\.(md|json)$/
+const VERDICT_JSON = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.json$/
+const REWORK_FILE = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.md$/
 
 function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value)
@@ -72,7 +85,6 @@ const plugin: Plugin = async ({ directory }) => {
 
   const stateFile = (taskId: string) => join(dir, PIPELINE, "state", `${taskId}.json`)
   const briefFile = (taskId: string) => join(dir, PIPELINE, "briefs", `${taskId}.md`)
-  const verdictFile = (taskId: string) => join(dir, PIPELINE, "verdicts", `${taskId}.json`)
 
   const readJson = <T,>(path: string, fallback: T): T => {
     try {
@@ -82,9 +94,97 @@ const plugin: Plugin = async ({ directory }) => {
     }
   }
 
-  const writeJson = (path: string, value: unknown) => {
+  const atomicWrite = (path: string, content: string) => {
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(value, null, 2))
+    const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+    writeFileSync(tmp, content)
+    renameSync(tmp, path)
+  }
+
+  const writeJson = (path: string, value: unknown) => {
+    atomicWrite(path, JSON.stringify(value, null, 2))
+  }
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const withLock = async (path: string, fn: () => void | Promise<void>) => {
+    const lock = `${path}.lock`
+    let acquired = false
+    for (let attempt = 0; attempt < 40; attempt++) {
+      try {
+        mkdirSync(lock)
+        acquired = true
+        break
+      } catch {
+        await sleep(50)
+      }
+    }
+    try {
+      await fn()
+    } finally {
+      if (acquired) {
+        try {
+          rmdirSync(lock)
+        } catch {}
+      }
+    }
+  }
+
+  const mutateState = async (path: string, mutate: (state: any) => void) => {
+    await withLock(path, () => {
+      const state = readJson<any>(path, null)
+      if (!state) return
+      mutate(state)
+      state.updated_at = new Date().toISOString()
+      writeJson(path, state)
+    })
+  }
+
+  const sealAttempt = (kind: "verdicts" | "rework", taskId: string, attempt: number) => {
+    try {
+      const artifactDir = join(dir, PIPELINE, kind)
+      if (!existsSync(artifactDir)) return
+      const prefix = `${taskId}-a${attempt}.`
+      const sealPath = join(artifactDir, `${taskId}-a${attempt}.seal`)
+      if (existsSync(sealPath)) return
+      const files: Record<string, string> = {}
+      for (const name of readdirSync(artifactDir)) {
+        if (!name.startsWith(prefix) || name.endsWith(".seal")) continue
+        const path = join(artifactDir, name)
+        if (!statSync(path).isFile()) continue
+        files[name] = "sha256:" + createHash("sha256").update(readFileSync(path)).digest("hex")
+      }
+      if (Object.keys(files).length === 0) return
+      writeJson(sealPath, { task_id: taskId, attempt, at: new Date().toISOString(), files })
+    } catch {}
+  }
+
+  const verifySeal = (kind: "verdicts" | "rework", taskId: string, attempt: number): string | null => {
+    const artifactDir = join(dir, PIPELINE, kind)
+    const sealPath = join(artifactDir, `${taskId}-a${attempt}.seal`)
+    if (!existsSync(sealPath)) return `нет пломбы ${PIPELINE}/${kind}/${taskId}-a${attempt}.seal`
+    const seal = readJson<any>(sealPath, null)
+    if (!seal || typeof seal.files !== "object" || seal.files === null) return "пломба повреждена"
+    for (const [name, expected] of Object.entries(seal.files as Record<string, string>)) {
+      const path = join(artifactDir, name)
+      if (!existsSync(path)) return `файл ${name} из пломбы отсутствует`
+      const actual = "sha256:" + createHash("sha256").update(readFileSync(path)).digest("hex")
+      if (actual !== expected) return `файл ${name} изменён после пломбы`
+    }
+    return null
+  }
+
+  const latestVerdict = (taskId: string): { path: string; attempt: number } | null => {
+    const artifactDir = join(dir, PIPELINE, "verdicts")
+    if (!existsSync(artifactDir)) return null
+    let best: { path: string; attempt: number } | null = null
+    for (const name of readdirSync(artifactDir)) {
+      const match = name.match(VERDICT_JSON)
+      if (!match || match[1] !== taskId) continue
+      const attempt = Number(match[2])
+      if (!best || attempt > best.attempt) best = { path: join(artifactDir, name), attempt }
+    }
+    return best
   }
 
   const stagedHash = (): string => {
@@ -111,31 +211,30 @@ const plugin: Plugin = async ({ directory }) => {
     return best
   }
 
-  const recordCandidate = () => {
+  const recordCandidate = async () => {
     try {
       const active = activeState()
       if (!active) return
-      const hash = stagedHash()
-      if (active.state.last_candidate_hash === hash) return
-      active.state.attempts = Number(active.state.attempts ?? 0) + 1
-      active.state.last_candidate_hash = hash
-      active.state.dispatch_open = false
-      active.state.updated_at = new Date().toISOString()
-      writeJson(active.path, active.state)
+      await mutateState(active.path, (state) => {
+        const hash = stagedHash()
+        if (state.last_candidate_hash === hash) return
+        state.attempts = Number(state.attempts ?? 0) + 1
+        state.last_candidate_hash = hash
+        state.dispatch_open = false
+      })
     } catch {}
   }
 
-  const applyReportMode = (text: string) => {
+  const applyReportMode = async (text: string) => {
     const mode = BRIEF_SIGNAL.test(text) ? "brief" : VERBOSE_SIGNAL.test(text) ? "verbose" : null
     if (!mode) return
     try {
-      mkdirSync(join(dir, PIPELINE), { recursive: true })
-      writeFileSync(join(dir, PIPELINE, "report-mode"), mode + "\n")
+      atomicWrite(join(dir, PIPELINE, "report-mode"), mode + "\n")
       const active = activeState()
       if (active) {
-        active.state.report_mode = mode
-        active.state.updated_at = new Date().toISOString()
-        writeJson(active.path, active.state)
+        await mutateState(active.path, (state) => {
+          state.report_mode = mode
+        })
       }
     } catch {}
   }
@@ -149,8 +248,7 @@ const plugin: Plugin = async ({ directory }) => {
     }
     if (!best) return
     try {
-      mkdirSync(join(dir, PIPELINE), { recursive: true })
-      writeFileSync(
+      atomicWrite(
         join(dir, PIPELINE, "route-hint"),
         JSON.stringify({ route: best.route, at: new Date().toISOString() }) + "\n",
       )
@@ -193,10 +291,22 @@ const plugin: Plugin = async ({ directory }) => {
     const raw = String(args?.filePath ?? args?.path ?? args?.file ?? "")
     if (!raw) return
     const rel = relativeTo(dir, raw)
+    const name = rel.split("/").pop() ?? ""
     if (role === "lead" && !under(rel, PIPELINE)) deny(`лид не правит файлы вне ${PIPELINE}/: ${rel}`)
+    if (role === "lead" && under(rel, `${PIPELINE}/verdicts`)) {
+      deny("вердикты — неизменяемые доказательства; лид их создавать и править не может")
+    }
+    if (role === "lead" && under(rel, `${PIPELINE}/rework`)) {
+      if (!REWORK_FILE.test(name)) deny("rework-пакет должен называться <task>-a<N>.md")
+      if (existsSync(join(dir, rel))) deny("rework-пакет неизменяем после записи: новая попытка — новый номер")
+    }
     if (role === "architect" && !under(rel, `${PIPELINE}/designs`)) deny("архитектор пишет только в .pipeline/designs/")
     if (role === "developer" && under(rel, PIPELINE)) deny("разработчику запрещено писать в .pipeline/")
-    if (role === "reviewer" && !under(rel, `${PIPELINE}/verdicts`)) deny("ревьювер пишет только вердикты в .pipeline/verdicts/")
+    if (role === "reviewer") {
+      if (!under(rel, `${PIPELINE}/verdicts`)) deny("ревьювер пишет только вердикты в .pipeline/verdicts/")
+      if (!VERDICT_FILE.test(name)) deny("вердикт должен называться <task>-a<N>.md или <task>-a<N>.json")
+      if (existsSync(join(dir, rel))) deny("вердикт уже зафиксирован: попытка неизменяема")
+    }
   }
 
   const checkCommit = (command: string) => {
@@ -205,10 +315,16 @@ const plugin: Plugin = async ({ directory }) => {
     if (!taskId) {
       deny("коммит обязан содержать task_id (T-ГГГГММДД-NN) в сообщении")
     } else {
-      const path = verdictFile(taskId)
-      if (!existsSync(path)) deny(`нет вердикта ${PIPELINE}/verdicts/${taskId}.json — коммит запрещён`)
-      const verdict = readJson<any>(path, null)
+      const found = latestVerdict(taskId)
+      if (!found) deny(`нет вердикта ${PIPELINE}/verdicts/<task>-a<N>.json — коммит запрещён`)
+      const verdict = readJson<any>(found.path, null)
       if (!verdict) deny("вердикт повреждён — коммит запрещён")
+      const sealIssue = verifySeal("verdicts", taskId, found.attempt)
+      if (sealIssue) deny(`${sealIssue} — коммит запрещён`)
+      const seal = readJson<any>(join(dir, PIPELINE, "verdicts", `${taskId}-a${found.attempt}.seal`), null)
+      const files = seal?.files ?? {}
+      const mdName = `${taskId}-a${found.attempt}.md`
+      if (!(mdName in files)) deny(`вердикт ${mdName} не входит в пломбу — коммит запрещён`)
       if (verdict.verdict !== "PASS") deny(`вердикт ${verdict.verdict}: коммит запрещён`)
       const hash = stagedHash()
       if (verdict.candidate_hash !== hash) {
@@ -229,6 +345,9 @@ const plugin: Plugin = async ({ directory }) => {
       if (subcommands.includes("commit")) {
         checkCommit(command)
         return
+      }
+      if (WRITE_SIGNAL.test(command) && /verdicts|rework/.test(command)) {
+        deny("доказательства (verdicts/rework) неизменяемы — правка запрещена")
       }
       if (WRITE_SIGNAL.test(command) && !command.includes(PIPELINE)) deny("лид пишет файлы только в .pipeline/")
       return
@@ -283,6 +402,21 @@ const plugin: Plugin = async ({ directory }) => {
           if (route === "full" && state.design_approved !== true) {
             deny("маршрут full требует утверждённого человеком дизайна")
           }
+          if (state.roadmap_id) {
+            const roadmapPath = join(dir, PIPELINE, "roadmap.json")
+            if (existsSync(roadmapPath)) {
+              const roadmap = readJson<any>(roadmapPath, null)
+              const nodes: any[] = Array.isArray(roadmap?.nodes) ? roadmap.nodes : []
+              const node = nodes.find((item) => item?.id === state.roadmap_id)
+              if (!node) deny(`узел roadmap «${state.roadmap_id}» не найден в ${PIPELINE}/roadmap.json`)
+              const deps: string[] = Array.isArray(node.depends_on) ? node.depends_on : []
+              const undone = deps.filter((id) => {
+                const dep = nodes.find((item) => item?.id === id)
+                return !dep || String(dep.status) !== "done"
+              })
+              if (undone.length > 0) deny(`roadmap: не завершены зависимости ${undone.join(", ")} — диспетч запрещён`)
+            }
+          }
           const max = Number(state.max_attempts ?? 3)
           const used = Number(state.attempts ?? 0)
           if (used >= max) {
@@ -320,7 +454,7 @@ const plugin: Plugin = async ({ directory }) => {
       if (!role) return
       roles.set(input.sessionID, role)
       if (role === "lead") {
-        applyReportMode(text)
+        await applyReportMode(text)
         applyRouteHint(text)
       }
     },
@@ -344,42 +478,56 @@ const plugin: Plugin = async ({ directory }) => {
     },
     "tool.execute.after": async (input) => {
       const role = roles.get(input.sessionID)
-      if (role !== "lead") return
+      if (!role) return
       const args: any = input.args ?? {}
       if (input.tool === "bash" || input.tool === "shell") {
+        if (role !== "lead") return
         const command = String(args?.command ?? "")
-        if (/\bgit\s+add\b/.test(command)) recordCandidate()
+        if (/\bgit\s+add\b/.test(command)) await recordCandidate()
         return
       }
       if (MUTATING_TOOLS.has(input.tool)) {
-        clearConsumedRouteHint(args)
+        const raw = String(args?.filePath ?? args?.path ?? args?.file ?? "")
+        if (!raw) return
+        const rel = relativeTo(dir, raw)
+        const name = rel.split("/").pop() ?? ""
+        if (role === "reviewer" && rel.startsWith(`${PIPELINE}/verdicts/`)) {
+          const match = name.match(VERDICT_JSON)
+          if (match) sealAttempt("verdicts", match[1], Number(match[2]))
+          return
+        }
+        if (role === "lead") {
+          if (rel.startsWith(`${PIPELINE}/rework/`)) {
+            const match = name.match(REWORK_FILE)
+            if (match) sealAttempt("rework", match[1], Number(match[2]))
+          }
+          clearConsumedRouteHint(args)
+        }
         return
       }
-      if (!isDispatchTool(input.tool)) return
+      if (role !== "lead" || !isDispatchTool(input.tool)) return
       const target: Role | undefined = dispatchTarget(args)
       if (target !== "developer") return
       const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
       const taskId = prompt.match(TASK_ID)?.[0]
       if (!taskId) return
       const path = stateFile(taskId)
-      const state = readJson<any>(path, null)
-      if (!state) return
-      if (state.dispatch_open === true) {
-        state.infra_failures = Number(state.infra_failures ?? 0) + 1
-      }
-      state.dispatch_open = true
-      const maxInfra = Number(state.max_infra_failures ?? 4)
-      const decision = String(state.infra_decision ?? "")
-      if (Number(state.infra_failures ?? 0) >= maxInfra && (decision === "continue" || decision === "replace")) {
-        state.infra_decision_history = [
-          ...(Array.isArray(state.infra_decision_history) ? state.infra_decision_history : []),
-          { decision, at: new Date().toISOString() },
-        ]
-        state.infra_failures = 0
-        state.infra_decision = null
-      }
-      state.updated_at = new Date().toISOString()
-      writeJson(path, state)
+      await mutateState(path, (state) => {
+        if (state.dispatch_open === true) {
+          state.infra_failures = Number(state.infra_failures ?? 0) + 1
+        }
+        state.dispatch_open = true
+        const maxInfra = Number(state.max_infra_failures ?? 4)
+        const decision = String(state.infra_decision ?? "")
+        if (Number(state.infra_failures ?? 0) >= maxInfra && (decision === "continue" || decision === "replace")) {
+          state.infra_decision_history = [
+            ...(Array.isArray(state.infra_decision_history) ? state.infra_decision_history : []),
+            { decision, at: new Date().toISOString() },
+          ]
+          state.infra_failures = 0
+          state.infra_decision = null
+        }
+      })
     },
   }
 }
