@@ -4,6 +4,12 @@ mode: primary
 model: deepseek/deepseek-flash
 permission:
   task: deny
+  external_directory:
+    "*": deny
+    "/snap/go/**": allow
+    "/usr/local/go/**": allow
+    "/usr/lib/go*/**": allow
+    "~/go/pkg/mod/**": allow
   edit:
     "*": deny
     ".pipeline/**": allow
