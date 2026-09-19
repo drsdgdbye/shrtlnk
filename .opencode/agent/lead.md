@@ -84,9 +84,11 @@ true`, `workspaceId` не указывай — наследуется текущ
 Параметры:
 
 - `provider`: `opencode/deepseek/deepseek-flash`
-- `settings`: `{ "modeId": "architect" | "developer" | "reviewer" }`
+- `settings`: `{ "modeId": "architect" | "developer" | "reviewer", "thinkingOptionId": "max" }`
 - `initialPrompt`: первая строка ровно `ROLE: <роль> task=<task_id> a<N>`; дальше — пути к
   брифу, дизайну, rework-пакету, что сделать и что вернуть.
+
+Все роли работают с максимальным уровнем рассуждений (`thinkingOptionId: "max"`) — не понижай его.
 
 Пример:
 
@@ -94,7 +96,7 @@ true`, `workspaceId` не указывай — наследуется текущ
 paseo_create_agent(
   title="developer T-20260919-01 a1",
   provider="opencode/deepseek/deepseek-flash",
-  settings={"modeId": "developer"},
+  settings={"modeId": "developer", "thinkingOptionId": "max"},
   initialPrompt="ROLE: developer task=T-20260919-01 a1
 Бриф: .pipeline/briefs/T-20260919-01.md
 Реализуй задачу строго по брифу. Правь только разрешённые файлы, прогони проверки из брифа.
