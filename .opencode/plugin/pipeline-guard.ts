@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 
 const ROLES = ["lead", "architect", "developer", "reviewer"] as const
@@ -88,6 +88,35 @@ const plugin: Plugin = async ({ directory }) => {
     return "sha256:" + createHash("sha256").update(diff).digest("hex")
   }
 
+  const terminalStatuses = new Set(["COMMITTED", "ESCALATED", "CANCELLED", "STOPPED"])
+  const activeState = (): { path: string; state: any } | null => {
+    const stateDir = join(dir, PIPELINE, "state")
+    if (!existsSync(stateDir)) return null
+    let best: { path: string; state: any } | null = null
+    for (const name of readdirSync(stateDir)) {
+      if (!name.endsWith(".json")) continue
+      const path = join(stateDir, name)
+      const state = readJson<any>(path, null)
+      if (!state || terminalStatuses.has(String(state.status))) continue
+      if (!best || String(state.updated_at ?? "") > String(best.state.updated_at ?? "")) best = { path, state }
+    }
+    return best
+  }
+
+  const recordCandidate = () => {
+    try {
+      const active = activeState()
+      if (!active) return
+      const hash = stagedHash()
+      if (active.state.last_candidate_hash === hash) return
+      active.state.attempts = Number(active.state.attempts ?? 0) + 1
+      active.state.last_candidate_hash = hash
+      active.state.dispatch_open = false
+      active.state.updated_at = new Date().toISOString()
+      writeJson(active.path, active.state)
+    } catch {}
+  }
+
   const isDispatchTool = (name: string) =>
     /(?:^|[._-])create[._-]?agent$/i.test(name) || /send[._-]?agent[._-]?prompt$/i.test(name)
 
@@ -166,15 +195,30 @@ const plugin: Plugin = async ({ directory }) => {
         if ((target === "developer" || target === "reviewer") && !existsSync(briefFile(taskId))) {
           deny(`нет брифа ${PIPELINE}/briefs/${taskId}.md — нет диспетча`)
         }
-        if (target === "developer") {
-          const state = readJson<any>(stateFile(taskId), null)
-          if (!state) deny(`нет состояния ${PIPELINE}/state/${taskId}.json`)
+        const state = readJson<any>(stateFile(taskId), null)
+        if ((target === "developer" || target === "reviewer") && !state) {
+          deny(`нет состояния ${PIPELINE}/state/${taskId}.json`)
+        }
+        if (state && target === "reviewer" && state.dispatch_open === true) {
+          deny("кандидат не зафиксирован: перед диспетчем ревьювера зафиксируй снимок через git add")
+        }
+        if (state && target === "developer") {
+          const decision = String(state.infra_decision ?? "")
+          if (decision === "stop") deny("человек остановил задачу после инфраструктурных отказов")
           if (state.design_required !== false && state.design_approved !== true) {
             deny("дизайн не утверждён человеком — диспетч разработчика запрещён")
           }
           const max = Number(state.max_attempts ?? 3)
           const used = Number(state.attempts ?? 0)
-          if (used >= max) deny(`бюджет попыток исчерпан (${used}/${max}) — эскалация человеку`)
+          if (used >= max) {
+            deny(`бюджет попыток исчерпан (${used}/${max}; попытка = зафиксированный кандидат) — эскалация человеку`)
+          }
+          const maxInfra = Number(state.max_infra_failures ?? 4)
+          const infra = Number(state.infra_failures ?? 0)
+          const prospective = infra + (state.dispatch_open === true ? 1 : 0)
+          if (prospective >= maxInfra && decision !== "continue" && decision !== "replace") {
+            deny(`инфраструктурных отказов ${prospective} из ${maxInfra} — нужно решение человека: продолжить, заменить исполнителя или остановить`)
+          }
         }
       }
     }
@@ -218,8 +262,14 @@ const plugin: Plugin = async ({ directory }) => {
     },
     "tool.execute.after": async (input) => {
       const role = roles.get(input.sessionID)
-      if (role !== "lead" || !isDispatchTool(input.tool)) return
+      if (role !== "lead") return
       const args: any = input.args ?? {}
+      if (input.tool === "bash" || input.tool === "shell") {
+        const command = String(args?.command ?? "")
+        if (/\bgit\s+add\b/.test(command)) recordCandidate()
+        return
+      }
+      if (!isDispatchTool(input.tool)) return
       const target: Role | undefined = dispatchTarget(args)
       if (target !== "developer") return
       const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
@@ -228,7 +278,20 @@ const plugin: Plugin = async ({ directory }) => {
       const path = stateFile(taskId)
       const state = readJson<any>(path, null)
       if (!state) return
-      state.attempts = Number(state.attempts ?? 0) + 1
+      if (state.dispatch_open === true) {
+        state.infra_failures = Number(state.infra_failures ?? 0) + 1
+      }
+      state.dispatch_open = true
+      const maxInfra = Number(state.max_infra_failures ?? 4)
+      const decision = String(state.infra_decision ?? "")
+      if (Number(state.infra_failures ?? 0) >= maxInfra && (decision === "continue" || decision === "replace")) {
+        state.infra_decision_history = [
+          ...(Array.isArray(state.infra_decision_history) ? state.infra_decision_history : []),
+          { decision, at: new Date().toISOString() },
+        ]
+        state.infra_failures = 0
+        state.infra_decision = null
+      }
       state.updated_at = new Date().toISOString()
       writeJson(path, state)
     },
