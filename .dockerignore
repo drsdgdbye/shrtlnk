@@ -1,0 +1,9 @@
+.git
+.github
+.pipeline
+.opencode
+data
+*.md
+Dockerfile
+.dockerignore
+docker-compose.yml
