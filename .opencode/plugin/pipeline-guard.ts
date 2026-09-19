@@ -15,6 +15,8 @@ const GIT_FLAGS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "-
 const COMMIT_BANNED = /(?:^|\s)(--amend|--all|-a|--patch|-p)(?=\s|$)/
 const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
 const ROLE_MARKER = /ROLE:\s*(lead|architect|developer|reviewer)\b/i
+const VERBOSE_SIGNAL = /(подробн|проще|попроще|по-простому|простыми словами|простым языком|для новичк|eli5|разжуй|verbose)/i
+const BRIEF_SIGNAL = /(кратко|покороче|без подробност|обычн(?:ый|ом) режим|\/brief)/i
 const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
 
 function isRole(value: string): value is Role {
@@ -114,6 +116,21 @@ const plugin: Plugin = async ({ directory }) => {
       active.state.dispatch_open = false
       active.state.updated_at = new Date().toISOString()
       writeJson(active.path, active.state)
+    } catch {}
+  }
+
+  const applyReportMode = (text: string) => {
+    const mode = BRIEF_SIGNAL.test(text) ? "brief" : VERBOSE_SIGNAL.test(text) ? "verbose" : null
+    if (!mode) return
+    try {
+      mkdirSync(join(dir, PIPELINE), { recursive: true })
+      writeFileSync(join(dir, PIPELINE, "report-mode"), mode + "\n")
+      const active = activeState()
+      if (active) {
+        active.state.report_mode = mode
+        active.state.updated_at = new Date().toISOString()
+        writeJson(active.path, active.state)
+      }
     } catch {}
   }
 
@@ -230,17 +247,21 @@ const plugin: Plugin = async ({ directory }) => {
       if (isRole(role)) roles.set(input.sessionID, role)
     },
     "chat.message": async (input, output) => {
-      const agentRole = input.agent?.toLowerCase() ?? ""
-      if (isRole(agentRole)) {
-        roles.set(input.sessionID, agentRole)
-        return
-      }
       const text = output.parts
         .map((part) => (part.type === "text" ? ((part as any).text ?? "") : ""))
         .join("\n")
-      const marker = text.match(ROLE_MARKER)
-      const role = marker?.[1]?.toLowerCase() ?? ""
-      if (isRole(role)) roles.set(input.sessionID, role)
+      const agentRole = input.agent?.toLowerCase() ?? ""
+      let role: Role | undefined
+      if (isRole(agentRole)) {
+        role = agentRole
+      } else {
+        const marker = text.match(ROLE_MARKER)
+        const found = marker?.[1]?.toLowerCase() ?? ""
+        if (isRole(found)) role = found
+      }
+      if (!role) return
+      roles.set(input.sessionID, role)
+      if (role === "lead") applyReportMode(text)
     },
     "permission.ask": async (input, output) => {
       const role = roles.get(input.sessionID)
