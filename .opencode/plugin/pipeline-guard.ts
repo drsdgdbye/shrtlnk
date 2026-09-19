@@ -1,0 +1,238 @@
+import type { Plugin } from "@opencode-ai/plugin"
+import { createHash } from "node:crypto"
+import { execFileSync } from "node:child_process"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+
+const ROLES = ["lead", "architect", "developer", "reviewer"] as const
+type Role = (typeof ROLES)[number]
+
+const PIPELINE = ".pipeline"
+const MUTATING_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"])
+const GIT_READ_SUBCOMMANDS = new Set(["status", "diff", "log", "show"])
+const GIT_LEAD_SUBCOMMANDS = new Set(["status", "diff", "log", "show", "add"])
+const GIT_FLAGS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"])
+const COMMIT_BANNED = /(?:^|\s)(--amend|--all|-a|--patch|-p)(?=\s|$)/
+const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
+const ROLE_MARKER = /ROLE:\s*(lead|architect|developer|reviewer)\b/i
+const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
+
+function isRole(value: string): value is Role {
+  return (ROLES as readonly string[]).includes(value)
+}
+
+function relativeTo(dir: string, path: string): string {
+  const absolute = isAbsolute(path) ? path : resolve(dir, path)
+  return relative(dir, absolute).split("\\").join("/")
+}
+
+function under(rel: string, prefix: string): boolean {
+  return rel === prefix || rel.startsWith(prefix + "/")
+}
+
+function gitSubcommand(segment: string): string {
+  const match = segment.match(/\bgit\b(.*)$/)
+  if (!match) return ""
+  const tokens = match[1].trim().split(/\s+/)
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (!token) continue
+    if (GIT_FLAGS_WITH_VALUE.has(token)) {
+      i++
+      continue
+    }
+    if (token.startsWith("-")) continue
+    return token
+  }
+  return ""
+}
+
+function gitSubcommands(command: string): string[] {
+  return command
+    .split(/\s*(?:&&|\|\||;|\|)\s*/)
+    .map(gitSubcommand)
+    .filter(Boolean)
+}
+
+const plugin: Plugin = async ({ directory }) => {
+  const dir = resolve(directory)
+  const roles = new Map<string, Role>()
+
+  const deny = (message: string): never => {
+    throw new Error(`pipeline-guard: ${message}`)
+  }
+
+  const stateFile = (taskId: string) => join(dir, PIPELINE, "state", `${taskId}.json`)
+  const briefFile = (taskId: string) => join(dir, PIPELINE, "briefs", `${taskId}.md`)
+  const verdictFile = (taskId: string) => join(dir, PIPELINE, "verdicts", `${taskId}.json`)
+
+  const readJson = <T,>(path: string, fallback: T): T => {
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as T
+    } catch {
+      return fallback
+    }
+  }
+
+  const writeJson = (path: string, value: unknown) => {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify(value, null, 2))
+  }
+
+  const stagedHash = (): string => {
+    const diff = execFileSync(
+      "git",
+      ["diff", "--cached", "--binary", "--no-color", "--", ".", ":(exclude).pipeline"],
+      { cwd: dir, maxBuffer: 256 * 1024 * 1024 },
+    )
+    return "sha256:" + createHash("sha256").update(diff).digest("hex")
+  }
+
+  const isDispatchTool = (name: string) =>
+    /(?:^|[._-])create[._-]?agent$/i.test(name) || /send[._-]?agent[._-]?prompt$/i.test(name)
+
+  const dispatchTarget = (args: any): Role | undefined => {
+    const modeId = String(args?.settings?.modeId ?? "").toLowerCase()
+    if (isRole(modeId)) return modeId
+    const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
+    const marker = prompt.match(ROLE_MARKER)
+    const role = marker?.[1]?.toLowerCase() ?? ""
+    return isRole(role) ? role : undefined
+  }
+
+  const checkEdit = (role: Role, args: any) => {
+    const raw = String(args?.filePath ?? args?.path ?? args?.file ?? "")
+    if (!raw) return
+    const rel = relativeTo(dir, raw)
+    if (role === "lead" && !under(rel, PIPELINE)) deny(`лид не правит файлы вне ${PIPELINE}/: ${rel}`)
+    if (role === "architect" && !under(rel, `${PIPELINE}/designs`)) deny("архитектор пишет только в .pipeline/designs/")
+    if (role === "developer" && under(rel, PIPELINE)) deny("разработчику запрещено писать в .pipeline/")
+    if (role === "reviewer" && !under(rel, `${PIPELINE}/verdicts`)) deny("ревьювер пишет только вердикты в .pipeline/verdicts/")
+  }
+
+  const checkCommit = (command: string) => {
+    if (COMMIT_BANNED.test(command)) deny("коммит с --amend/-a/--patch запрещён")
+    const taskId = command.match(TASK_ID)?.[0]
+    if (!taskId) {
+      deny("коммит обязан содержать task_id (T-ГГГГММДД-NN) в сообщении")
+    } else {
+      const path = verdictFile(taskId)
+      if (!existsSync(path)) deny(`нет вердикта ${PIPELINE}/verdicts/${taskId}.json — коммит запрещён`)
+      const verdict = readJson<any>(path, null)
+      if (!verdict) deny("вердикт повреждён — коммит запрещён")
+      if (verdict.verdict !== "PASS") deny(`вердикт ${verdict.verdict}: коммит запрещён`)
+      const hash = stagedHash()
+      if (verdict.candidate_hash !== hash) {
+        deny(`PASS устарел: вердикт ${verdict.candidate_hash}, индекс ${hash} — нужна перепроверка`)
+      }
+    }
+  }
+
+  const checkBash = (role: Role, args: any) => {
+    const command = String(args?.command ?? "")
+    if (!command) return
+    const subcommands = gitSubcommands(command)
+    const nonRead = subcommands.filter((sub) => !GIT_READ_SUBCOMMANDS.has(sub))
+
+    if (role === "lead") {
+      const foreign = subcommands.filter((sub) => !GIT_LEAD_SUBCOMMANDS.has(sub) && sub !== "commit")
+      if (foreign.length > 0) deny(`лиду разрешены git status/diff/log/show/add/commit, получено: ${foreign.join(", ")}`)
+      if (subcommands.includes("commit")) {
+        checkCommit(command)
+        return
+      }
+      if (WRITE_SIGNAL.test(command) && !command.includes(PIPELINE)) deny("лид пишет файлы только в .pipeline/")
+      return
+    }
+
+    if (nonRead.length > 0) deny(`git-мутации запрещены роли ${role}: ${nonRead.join(", ")}`)
+    if ((role === "architect" || role === "reviewer") && WRITE_SIGNAL.test(command)) deny(`роль ${role} не выполняет мутирующие команды`)
+    if (role === "developer" && command.includes(PIPELINE)) deny("разработчику запрещён доступ к .pipeline/ через bash")
+    if (role === "reviewer" && command.includes(PIPELINE) && !command.includes("candidate-hash.sh")) {
+      deny("ревьюверу в .pipeline/ разрешён только candidate-hash.sh")
+    }
+  }
+
+  const checkDispatch = (args: any) => {
+    const target: Role | undefined = dispatchTarget(args)
+    if (target === undefined) {
+      deny("диспетч обязан указывать роль: settings.modeId или ROLE-маркер")
+    } else {
+      const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
+      const taskId = prompt.match(TASK_ID)?.[0]
+      if (!taskId) {
+        deny("диспетч обязан содержать task_id вида T-ГГГГММДД-NN")
+      } else {
+        if ((target === "developer" || target === "reviewer") && !existsSync(briefFile(taskId))) {
+          deny(`нет брифа ${PIPELINE}/briefs/${taskId}.md — нет диспетча`)
+        }
+        if (target === "developer") {
+          const state = readJson<any>(stateFile(taskId), null)
+          if (!state) deny(`нет состояния ${PIPELINE}/state/${taskId}.json`)
+          if (state.design_required !== false && state.design_approved !== true) {
+            deny("дизайн не утверждён человеком — диспетч разработчика запрещён")
+          }
+          const max = Number(state.max_attempts ?? 3)
+          const used = Number(state.attempts ?? 0)
+          if (used >= max) deny(`бюджет попыток исчерпан (${used}/${max}) — эскалация человеку`)
+        }
+      }
+    }
+  }
+
+  return {
+    "chat.params": async (input) => {
+      const role = input.agent?.toLowerCase() ?? ""
+      if (isRole(role)) roles.set(input.sessionID, role)
+    },
+    "chat.message": async (input, output) => {
+      const agentRole = input.agent?.toLowerCase() ?? ""
+      if (isRole(agentRole)) {
+        roles.set(input.sessionID, agentRole)
+        return
+      }
+      const text = output.parts
+        .map((part) => (part.type === "text" ? ((part as any).text ?? "") : ""))
+        .join("\n")
+      const marker = text.match(ROLE_MARKER)
+      const role = marker?.[1]?.toLowerCase() ?? ""
+      if (isRole(role)) roles.set(input.sessionID, role)
+    },
+    "permission.ask": async (input, output) => {
+      const role = roles.get(input.sessionID)
+      if (role && output.status === "ask") output.status = "deny"
+    },
+    "tool.execute.before": async (input, output) => {
+      const role = roles.get(input.sessionID)
+      if (!role) return
+      const args: any = output.args ?? {}
+      if (MUTATING_TOOLS.has(input.tool)) {
+        checkEdit(role, args)
+        return
+      }
+      if (input.tool === "bash" || input.tool === "shell") {
+        checkBash(role, args)
+        return
+      }
+      if (role === "lead" && isDispatchTool(input.tool)) checkDispatch(args)
+    },
+    "tool.execute.after": async (input) => {
+      const role = roles.get(input.sessionID)
+      if (role !== "lead" || !isDispatchTool(input.tool)) return
+      const args: any = input.args ?? {}
+      const target: Role | undefined = dispatchTarget(args)
+      if (target !== "developer") return
+      const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
+      const taskId = prompt.match(TASK_ID)?.[0]
+      if (!taskId) return
+      const path = stateFile(taskId)
+      const state = readJson<any>(path, null)
+      if (!state) return
+      state.attempts = Number(state.attempts ?? 0) + 1
+      state.updated_at = new Date().toISOString()
+      writeJson(path, state)
+    },
+  }
+}
+
+export default plugin
