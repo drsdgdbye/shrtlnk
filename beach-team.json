@@ -1,0 +1,66 @@
+{
+  "harness": "opencode",
+  "stack": "go",
+  "core": [
+    "lead",
+    "developer",
+    "reviewer"
+  ],
+  "modules": [
+    "architect"
+  ],
+  "routes": {
+    "feature": "full",
+    "fix": "standard",
+    "chore": "standard"
+  },
+  "models": {
+    "default": "deepseek/deepseek-flash",
+    "overrides": {}
+  },
+  "thinking": {
+    "default": "max",
+    "overrides": {}
+  },
+  "alternates": [
+    "pi/deepseek/deepseek-v4-pro"
+  ],
+  "checks": {
+    "format": "gofmt -l .",
+    "lint": "go vet ./...",
+    "build": "go build ./...",
+    "test": "go test ./...",
+    "race": "go test -race ./..."
+  },
+  "permissions": {
+    "external_allow": [
+      "/snap/go/**",
+      "/usr/local/go/**",
+      "/usr/lib/go*/**",
+      "~/go/pkg/mod/**"
+    ],
+    "bash_extra": {
+      "architect": [
+        "go doc*",
+        "go list*"
+      ],
+      "developer": [
+        "gofmt*",
+        "go vet*",
+        "go build*",
+        "go test*",
+        "go mod*",
+        "go doc*",
+        "go list*"
+      ],
+      "reviewer": [
+        "gofmt*",
+        "go vet*",
+        "go build*",
+        "go test*",
+        "go doc*",
+        "go list*"
+      ]
+    }
+  }
+}

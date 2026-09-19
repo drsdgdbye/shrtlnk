@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 
 const ROLES = ["lead", "architect", "developer", "reviewer"] as const
@@ -17,6 +17,12 @@ const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
 const ROLE_MARKER = /ROLE:\s*(lead|architect|developer|reviewer)\b/i
 const VERBOSE_SIGNAL = /(подробн|проще|попроще|по-простому|простыми словами|простым языком|для новичк|eli5|разжуй|verbose)/i
 const BRIEF_SIGNAL = /(кратко|покороче|без подробност|обычн(?:ый|ом) режим|\/brief)/i
+const ROUTE_VALUES = new Set(["full", "standard", "assisted"])
+const ROUTE_SIGNALS: Array<{ route: string; re: RegExp }> = [
+  { route: "full", re: /(\/full\b|полный маршрут|с дизайном)/i },
+  { route: "standard", re: /(\/standard\b|в обход архитектора|без архитектора|без дизайна|сокращ[её]нн)/i },
+  { route: "assisted", re: /(\/assisted\b|правку вн[её]с сам|правлю сам|я поправлю|без разработчика|сам исправлю|сам внесу)/i },
+]
 const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
 
 function isRole(value: string): value is Role {
@@ -134,6 +140,43 @@ const plugin: Plugin = async ({ directory }) => {
     } catch {}
   }
 
+  const applyRouteHint = (text: string) => {
+    let best: { route: string; index: number } | null = null
+    for (const signal of ROUTE_SIGNALS) {
+      const match = signal.re.exec(text)
+      if (!match || match.index === undefined) continue
+      if (!best || match.index > best.index) best = { route: signal.route, index: match.index }
+    }
+    if (!best) return
+    try {
+      mkdirSync(join(dir, PIPELINE), { recursive: true })
+      writeFileSync(
+        join(dir, PIPELINE, "route-hint"),
+        JSON.stringify({ route: best.route, at: new Date().toISOString() }) + "\n",
+      )
+    } catch {}
+  }
+
+  const routeOf = (state: any): string => {
+    const route = String(state?.route ?? "")
+    if (route) return route
+    return state?.design_required === false ? "standard" : "full"
+  }
+
+  const clearConsumedRouteHint = (args: any) => {
+    const raw = String(args?.filePath ?? args?.path ?? args?.file ?? "")
+    if (!raw) return
+    const rel = relativeTo(dir, raw)
+    if (!rel.startsWith(`${PIPELINE}/state/`) || !rel.endsWith(".json")) return
+    const state = readJson<any>(join(dir, rel), null)
+    if (!state || !ROUTE_VALUES.has(String(state.route ?? ""))) return
+    const hint = join(dir, PIPELINE, "route-hint")
+    if (!existsSync(hint)) return
+    try {
+      unlinkSync(hint)
+    } catch {}
+  }
+
   const isDispatchTool = (name: string) =>
     /(?:^|[._-])create[._-]?agent$/i.test(name) || /send[._-]?agent[._-]?prompt$/i.test(name)
 
@@ -219,11 +262,26 @@ const plugin: Plugin = async ({ directory }) => {
         if (state && target === "reviewer" && state.dispatch_open === true) {
           deny("кандидат не зафиксирован: перед диспетчем ревьювера зафиксируй снимок через git add")
         }
+        if (state && target === "architect") {
+          const teamPath = join(dir, PIPELINE, "team.json")
+          if (existsSync(teamPath)) {
+            const team = readJson<any>(teamPath, null)
+            const modules = Array.isArray(team?.modules) ? team.modules : []
+            if (!modules.includes("architect")) deny("модуль architect не включён в beach-team.json")
+          }
+        }
         if (state && target === "developer") {
           const decision = String(state.infra_decision ?? "")
           if (decision === "stop") deny("человек остановил задачу после инфраструктурных отказов")
-          if (state.design_required !== false && state.design_approved !== true) {
-            deny("дизайн не утверждён человеком — диспетч разработчика запрещён")
+          const route = routeOf(state)
+          if (!ROUTE_VALUES.has(route)) {
+            deny(`недопустимый route «${route}» — допустимы: full, standard, assisted`)
+          }
+          if (route === "assisted") {
+            deny("маршрут assisted: правку вносит человек — диспетч разработчика запрещён")
+          }
+          if (route === "full" && state.design_approved !== true) {
+            deny("маршрут full требует утверждённого человеком дизайна")
           }
           const max = Number(state.max_attempts ?? 3)
           const used = Number(state.attempts ?? 0)
@@ -261,7 +319,10 @@ const plugin: Plugin = async ({ directory }) => {
       }
       if (!role) return
       roles.set(input.sessionID, role)
-      if (role === "lead") applyReportMode(text)
+      if (role === "lead") {
+        applyReportMode(text)
+        applyRouteHint(text)
+      }
     },
     "permission.ask": async (input, output) => {
       const role = roles.get(input.sessionID)
@@ -288,6 +349,10 @@ const plugin: Plugin = async ({ directory }) => {
       if (input.tool === "bash" || input.tool === "shell") {
         const command = String(args?.command ?? "")
         if (/\bgit\s+add\b/.test(command)) recordCandidate()
+        return
+      }
+      if (MUTATING_TOOLS.has(input.tool)) {
+        clearConsumedRouteHint(args)
         return
       }
       if (!isDispatchTool(input.tool)) return

@@ -54,25 +54,48 @@ permission:
 - Запрет плагина — не препятствие, а сигнал: он срабатывает, когда нарушен протокол.
 - Bash: одна команда за вызов, без `cd` (рабочий каталог — корень репозитория) и без цепочек с
   утилитами вне разрешённых прав.
+- Состав ролей, модели, усилия и дефолтные маршруты читай из `.pipeline/team.json` — зашитых
+  моделей и команд не знай.
+
+## Конфигурация команды
+
+`.pipeline/team.json` — резолв `beach-team.json` для диспетча:
+
+- `core` — ядро команды (всегда), `modules` — подключённые роли; роли вне этого списка не вызывай.
+- `roles.<роль>`: `dispatch` (строка «провайдер/модель» для `provider`), `thinkingOptionId`, `model`.
+- `routes` — дефолтный маршрут по типу задачи; `alternates` — запасные исполнители.
+
+Маршруты:
+
+| Маршрут | Кто исполняет | Когда |
+|---|---|---|
+| `full` | архитектор → разработчик → ревьювер | фичи, когда модуль архитектора включён |
+| `standard` | разработчик → ревьювер | fix/chore, фичи без архитектора |
+| `assisted` | человек правит → ревьювер → твой коммит | мелкие правки, человек сказал «правлю сам» |
+
+Маршрут фиксируется в `state.route`. Подсказку оставляет плагин в `.pipeline/route-hint` по
+словам человека («в обход архитектора», «правлю сам», `/assisted`) — прочитай её при GOAL и погаси,
+записав `route` в state.
 
 ## Цикл
 
 1. **GOAL.** Прими задачу, присвой `task_id` (`T-ГГГГММДД-NN`). Определи тип: `feature` или
-   `bugfix`/`chore`. Создай `.pipeline/state/<task_id>.json` по шаблону состояния:
-   `{"task_id","type","status":"GOAL","design_required":true,"design_approved":false,
+   `bugfix`/`chore`. Определи маршрут: сначала `.pipeline/route-hint`, иначе `routes.<тип>` из
+   `.pipeline/team.json`. Создай `.pipeline/state/<task_id>.json`:
+   `{"task_id","type","route":"full|standard|assisted","status":"GOAL","design_approved":false,
    "attempts":0,"max_attempts":3,"infra_failures":0,"max_infra_failures":4,"infra_decision":null,
    "dispatch_open":false,"last_candidate_hash":null,"candidate_hash":null,"verdict":null,
    "report_mode":"brief","open_questions":[],"updated_at":"..."}`.
-2. **DESIGN.** Для `feature` запусти архитектора: цель, ограничения, ссылки на код. Дождись
-   `.pipeline/designs/<task_id>.md` и предъяви дизайн человеку уведомлением: суть, варианты,
-   открытые вопросы; запроси «утверждаю» или правки. Ставь `design_approved: true` только после
-   явного ответа человека. Для `bugfix`/`chore` поставь `design_required: false`; в сомнении —
-   спроси человека.
+2. **DESIGN.** Только для маршрута `full` при включённом модуле `architect`: запусти архитектора
+   (цель, ограничения, ссылки на код), дождись `.pipeline/designs/<task_id>.md`, предъяви дизайн
+   человеку: суть, варианты, открытые вопросы; запроси «утверждаю» или правки. `design_approved:
+   true` — только после явного ответа человека. Для `standard` и `assisted` дизайн не требуется.
 3. **BRIEF.** Напиши бриф по шаблону `.pipeline/templates/brief.md` в
    `.pipeline/briefs/<task_id>.md`. Все обязательные поля заполнены; пустое поле — это GAP, а не
-   «на усмотрение разработчика».
-4. **DISPATCH.** Запусти свежего разработчика на попытку (create, не повторный send). Дождись
-   уведомления о завершении и читай артефакты, а не отчёт агента.
+   «на усмотрение разработчика». Проверки для брифа — из `checks` в `.pipeline/team.json`.
+4. **DISPATCH.** Для `full` и `standard` запусти свежего разработчика (create, не повторный send).
+   Для `assisted` разработчика не запускай: попроси человека внести правку и зафиксируй снимок
+   (`git add`) — это и есть попытка. Дождись уведомления и читай артефакты, а не отчёт агента.
 5. **VERIFY.** Запусти свежего ревьювера: task_id, путь брифа, путь дизайна, попытка. Диспетч
    возможен только после фиксации кандидата (`git add`) — иначе гейт запретит. Дождись вердикта.
    FAIL → собери rework-пакет и запусти следующую попытку. PASS → приёмка.
@@ -89,22 +112,22 @@ permission:
 или ревьюверу, но не для попыток разработчика. Новый агент на каждую попытку, `notifyOnFinish:
 true`, `workspaceId` не указывай — наследуется текущий.
 
-Параметры:
+Параметры бери из `.pipeline/team.json`:
 
-- `provider`: `opencode/deepseek/deepseek-flash`
-- `settings`: `{ "modeId": "architect" | "developer" | "reviewer", "thinkingOptionId": "max" }`
+- `provider`: `roles.<роль>.dispatch` (строка «провайдер/модель» из конфигурации)
+- `settings`: `{ "modeId": "<роль>", "thinkingOptionId": roles.<роль>.thinkingOptionId }`
 - `initialPrompt`: первая строка ровно `ROLE: <роль> task=<task_id> a<N>`; дальше — пути к
   брифу, дизайну, rework-пакету, что сделать и что вернуть.
 
-Все роли работают с максимальным уровнем рассуждений (`thinkingOptionId: "max"`) — не понижай его.
+Диспетчь только роли из `core` + `modules`. Уровень усилия не понижай.
 
 Пример:
 
 ```
 paseo_create_agent(
   title="developer T-20260919-01 a1",
-  provider="opencode/deepseek/deepseek-flash",
-  settings={"modeId": "developer", "thinkingOptionId": "max"},
+  provider="<roles.developer.dispatch>",
+  settings={"modeId": "developer", "thinkingOptionId": "<roles.developer.thinkingOptionId>"},
   initialPrompt="ROLE: developer task=T-20260919-01 a1
 Бриф: .pipeline/briefs/T-20260919-01.md
 Реализуй задачу строго по брифу. Правь только разрешённые файлы, прогони проверки из брифа.
@@ -112,7 +135,8 @@ paseo_create_agent(
 )
 ```
 
-Гейт плагина проверит: бриф существует, дизайн утверждён (для фич), бюджет не исчерпан. Не
+Гейт плагина проверит: бриф существует; для `full` дизайн утверждён; для `assisted` диспетч
+разработчика запрещён; модуль архитектора подключён; бюджет и счётчик отказов не исчерпаны. Не
 пытайся обойти отказ — устрани причину.
 
 ## Хеш и коммит
@@ -133,8 +157,8 @@ paseo_create_agent(
 `.pipeline/state/<task_id>.json` в поле `infra_decision`:
 
 - `continue` — продолжить с тем же исполнителем;
-- `replace` — сменить исполнителя (например, на `pi/deepseek/deepseek-v4-pro`) и записать выбор
-  в поле `executor`;
+- `replace` — сменить исполнителя: возьми следующего кандидата из `alternates`
+  (`.pipeline/team.json`) и запиши выбор в поле `executor`;
 - `stop` — остановить и эскалировать.
 
 После первого разрешённого диспетча плагин сам сбросит счётчик отказов и сотрёт решение, сохранив
