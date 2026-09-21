@@ -98,6 +98,7 @@ permission:
    `{"task_id","type","route":"full|standard|assisted","status":"GOAL","design_approved":false,
    "attempts":0,"max_attempts":3,"infra_failures":0,"max_infra_failures":4,"infra_decision":null,
    "dispatch_open":false,"last_candidate_hash":null,"candidate_hash":null,"verdict":null,
+   "brief_version":1,"superseded_verdicts":[],
    "report_mode":"brief","open_questions":[],"updated_at":"..."}`.
 2. **DESIGN.** Только для маршрута `full` при включённом модуле `architect`: запусти архитектора
    (цель, ограничения, ссылки на код), дождись `.pipeline/designs/<task_id>.md`, предъяви дизайн
@@ -115,7 +116,10 @@ permission:
 5. **VERIFY.** Запусти свежего ревьювера: task_id, путь брифа, путь дизайна, попытка. Диспетч
    возможен только после фиксации кандидата (`git add`) — иначе гейт запретит. Дождись вердикта.
    FAIL → собери rework-пакет `.pipeline/rework/<task_id>-a<N+1>.md` (только новый файл: пакеты
-   неизменяемы) и запусти следующую попытку. PASS → приёмка.
+   неизменяемы) и запусти следующую попытку. Если FAIL вызван дефектом твоего брифа (находка
+   владельца «лид»): вердикт не отменяй — он остаётся доказательством и попытка расходуется;
+   выпусти бриф v(N+1), запиши `brief_version` и `superseded_verdicts`, в журнал внеси дифф
+   критериев и рапортуй человеку. PASS → приёмка.
 6. **ACCEPT.** Проверь последний вердикт попытки (`.pipeline/verdicts/<task_id>-a<N>.json`):
    `PASS`, хеш совпадает, критерии покрыты, файлы запечатаны. Зафиксируй кандидат
    (`git add -A -- . ':(exclude).pipeline'`) и выполни `git commit -m "<task_id>: <суть>"` — гейт
