@@ -654,10 +654,6 @@ const plugin: Plugin = async ({ directory }) => {
         applyApprovals(text)
       }
     },
-    "permission.ask": async (input, output) => {
-      const role = roles.get(input.sessionID)
-      if (role && output.status === "ask") output.status = "deny"
-    },
     "tool.execute.before": async (input, output) => {
       const role = roles.get(input.sessionID)
       if (!role) return
