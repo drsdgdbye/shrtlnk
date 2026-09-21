@@ -35,6 +35,8 @@ permission:
     "awk*": allow
     "cut*": allow
     "tr*": allow
+  skill:
+    "*": deny
 ---
 
 # Архитектор

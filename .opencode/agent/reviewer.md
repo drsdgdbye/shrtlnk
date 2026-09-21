@@ -43,6 +43,8 @@ permission:
     ".pipeline/tools/candidate-hash.sh*": allow
     "bash .pipeline/tools/candidate-hash.sh*": allow
     "sh .pipeline/tools/candidate-hash.sh*": allow
+  skill:
+    "*": deny
 ---
 
 # Ревьювер

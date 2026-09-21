@@ -20,7 +20,20 @@ type Role = (typeof ROLES)[number]
 const PIPELINE = ".pipeline"
 const MUTATING_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"])
 const GIT_READ_SUBCOMMANDS = new Set(["status", "diff", "log", "show"])
-const GIT_LEAD_SUBCOMMANDS = new Set(["status", "diff", "log", "show", "add"])
+const GIT_LEAD_SUBCOMMANDS = new Set([
+  "status",
+  "diff",
+  "log",
+  "show",
+  "add",
+  "push",
+  "checkout",
+  "switch",
+  "branch",
+  "fetch",
+  "pull",
+  "ls-remote",
+])
 const GIT_FLAGS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"])
 const COMMIT_BANNED = /(?:^|\s)(--amend|--all|-a|--patch|-p)(?=\s|$)/
 const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
@@ -37,6 +50,25 @@ const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\
 const VERDICT_FILE = /^T-\d{8}-[A-Za-z0-9-]+-a\d+\.(md|json)$/
 const VERDICT_JSON = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.json$/
 const REWORK_FILE = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.md$/
+const APPROVAL_OPS = ["repo", "commit", "push", "pr", "merge", "release"] as const
+type ApprovalOp = (typeof APPROVAL_OPS)[number]
+const APPROVAL_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
+  { op: "repo", re: /(\/approve\s+repo|разрешаю\s+репозитор|создавай\s+репозитор|создай\s+репозитор)/i },
+  { op: "commit", re: /(\/approve\s+commit|разрешаю\s+коммит|коммить|можно\s+коммит)/i },
+  { op: "push", re: /(\/approve\s+push|разрешаю\s+пуш|пушь|можно\s+пушить|запуш)/i },
+  { op: "pr", re: /(\/approve\s+pr|разрешаю\s+pr|создавай\s+pr|создай\s+pr|можно\s+pr)/i },
+  { op: "merge", re: /(\/approve\s+merge|разрешаю\s+merge|мержи|можно\s+мержить)/i },
+  { op: "release", re: /(\/approve\s+release|разрешаю\s+релиз|выпускай\s+релиз|создавай\s+релиз)/i },
+]
+const REVOKE_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
+  { op: "repo", re: /(\/revoke\s+repo|отзываю\s+репозитор)/i },
+  { op: "commit", re: /(\/revoke\s+commit|отзываю\s+коммит)/i },
+  { op: "push", re: /(\/revoke\s+push|отзываю\s+пуш)/i },
+  { op: "pr", re: /(\/revoke\s+pr|отзываю\s+pr)/i },
+  { op: "merge", re: /(\/revoke\s+merge|отзываю\s+merge)/i },
+  { op: "release", re: /(\/revoke\s+release|отзываю\s+релиз)/i },
+]
+const UMBRELLA_RE = /(разрешаю\s+поставку|полный\s+цикл\s+поставки)/i
 
 function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value)
@@ -187,6 +219,109 @@ const plugin: Plugin = async ({ directory }) => {
     return best
   }
 
+  const gitOut = (args: string[]): string => {
+    try {
+      return execFileSync("git", args, { cwd: dir, stdio: "pipe" }).toString("utf8").trim()
+    } catch {
+      return ""
+    }
+  }
+
+  const currentBranch = () => gitOut(["rev-parse", "--abbrev-ref", "HEAD"])
+  const headCommit = () => gitOut(["rev-parse", "HEAD"])
+
+  const approvalPath = (key: string) => join(dir, PIPELINE, "approvals", `${key}.json`)
+
+  const requireApproval = (key: string, op: ApprovalOp, what: string) => {
+    const data = readJson<any>(approvalPath(key), null)
+    if (!data || typeof data[op] !== "string" || !data[op]) {
+      deny(`нет разрешения человека на ${what} — нужно сообщение «разрешаю ${op}» или /approve ${op}`)
+    }
+  }
+
+  const applyApprovals = (text: string) => {
+    try {
+      const active = activeState()
+      const taskId = active ? String(active.state.task_id ?? "") : ""
+      const write = (key: string, mutate: (data: any) => void) => {
+        const path = approvalPath(key)
+        const data = readJson<any>(path, {}) ?? {}
+        mutate(data)
+        data.updated_at = new Date().toISOString()
+        writeJson(path, data)
+      }
+      for (const signal of APPROVAL_SIGNALS) {
+        if (!signal.re.test(text)) continue
+        const key = signal.op === "repo" ? "_repo" : taskId || "_general"
+        write(key, (data) => {
+          data[signal.op] = new Date().toISOString()
+        })
+      }
+      if (UMBRELLA_RE.test(text)) {
+        const key = taskId || "_general"
+        write(key, (data) => {
+          const at = new Date().toISOString()
+          data.commit = data.commit ?? at
+          data.push = data.push ?? at
+          data.pr = data.pr ?? at
+        })
+      }
+      for (const signal of REVOKE_SIGNALS) {
+        if (!signal.re.test(text)) continue
+        const key = signal.op === "repo" ? "_repo" : taskId || "_general"
+        write(key, (data) => {
+          delete data[signal.op]
+        })
+      }
+    } catch {}
+  }
+
+  const checkPush = () => {
+    const active = activeState()
+    if (!active) deny("нет активной задачи — push запрещён")
+    const taskId = String(active!.state.task_id ?? "")
+    const branch = currentBranch()
+    if (branch !== `task/${taskId}`) deny(`push разрешён только с ветки task/${taskId}, текущая: ${branch || "неизвестна"}`)
+    requireApproval(taskId, "push", "push")
+    const head = headCommit()
+    if (!head || head !== active!.state.delivered_commit) {
+      deny("push только проверенного коммита: HEAD не совпадает с delivered_commit")
+    }
+  }
+
+  const checkGh = (command: string) => {
+    const active = activeState()
+    const taskId = active ? String(active.state.task_id ?? "") : ""
+    if (/\bgh\s+repo\s+create\b/.test(command)) {
+      requireApproval("_repo", "repo", "создание репозитория")
+      return
+    }
+    if (/\bgh\s+pr\s+create\b/.test(command)) {
+      if (!active) deny("нет активной задачи для создания PR")
+      requireApproval(taskId, "pr", "создание PR")
+      const head = headCommit()
+      if (!head || head !== active!.state.delivered_commit) {
+        deny("PR только по проверенному коммиту: HEAD не совпадает с delivered_commit")
+      }
+      return
+    }
+    if (/\bgh\s+pr\s+merge\b/.test(command)) {
+      if (!active) deny("нет активной задачи для merge")
+      requireApproval(taskId, "merge", "merge")
+      if (!active!.state.pr_number) deny("merge только по PR, созданному через пайплайн")
+      return
+    }
+    if (/\bgh\s+release\s+create\b/.test(command)) {
+      requireApproval(taskId || "_general", "release", "релиз")
+      if (!active || !active.state.merge_commit) deny("релиз только после merge")
+      return
+    }
+    if (/\bgh\s+workflow\s+run\b/.test(command)) deny("gh workflow run вне мандата")
+    if (/\bgh\s+api\b/.test(command) && /(-X|--method)\s*(POST|PUT|PATCH|DELETE)|(^|\s)-f(\s|$)|mutation/i.test(command)) {
+      deny("мутирующий gh api запрещён")
+    }
+  }
+
   const stagedHash = (): string => {
     const diff = execFileSync(
       "git",
@@ -223,6 +358,54 @@ const plugin: Plugin = async ({ directory }) => {
         state.dispatch_open = false
       })
     } catch {}
+  }
+
+  const recordCommit = async (command: string) => {
+    const active = activeState()
+    if (!active) return
+    const head = headCommit()
+    if (!head) return
+    await mutateState(active.path, (state) => {
+      const taskId = command.match(TASK_ID)?.[0]
+      if (taskId && taskId !== state.task_id) return
+      state.delivered_commit = head
+    })
+  }
+
+  const recordPullRequest = (output: unknown) => {
+    const active = activeState()
+    if (!active) return
+    const text = JSON.stringify(output ?? {})
+    const match = text.match(/(https:\/\/github\.com\/[^"\s]+\/pull\/(\d+))/)
+    if (!match) return
+    const state = readJson<any>(active.path, null)
+    if (!state) return
+    state.pr_url = match[1]
+    state.pr_number = Number(match[2])
+    state.updated_at = new Date().toISOString()
+    writeJson(active.path, state)
+  }
+
+  const recordMerge = async () => {
+    const active = activeState()
+    if (!active) return
+    const pr = Number(active.state.pr_number ?? 0)
+    let mergeCommit = ""
+    if (pr > 0) {
+      try {
+        mergeCommit = execFileSync(
+          "gh",
+          ["pr", "view", String(pr), "--json", "mergeCommit", "--jq", ".mergeCommit.oid"],
+          { cwd: dir, stdio: "pipe" },
+        )
+          .toString("utf8")
+          .trim()
+      } catch {}
+    }
+    await mutateState(active.path, (state) => {
+      state.merge_commit = mergeCommit || state.merge_commit || "merged"
+      state.merged_at = new Date().toISOString()
+    })
   }
 
   const applyReportMode = async (text: string) => {
@@ -296,6 +479,9 @@ const plugin: Plugin = async ({ directory }) => {
     if (role === "lead" && under(rel, `${PIPELINE}/verdicts`)) {
       deny("вердикты — неизменяемые доказательства; лид их создавать и править не может")
     }
+    if (role === "lead" && under(rel, `${PIPELINE}/approvals`)) {
+      deny("разрешения человека пишет только плагин — лид их не правит")
+    }
     if (role === "lead" && under(rel, `${PIPELINE}/rework`)) {
       if (!REWORK_FILE.test(name)) deny("rework-пакет должен называться <task>-a<N>.md")
       if (existsSync(join(dir, rel))) deny("rework-пакет неизменяем после записи: новая попытка — новый номер")
@@ -317,6 +503,7 @@ const plugin: Plugin = async ({ directory }) => {
     } else {
       const found = latestVerdict(taskId)
       if (!found) deny(`нет вердикта ${PIPELINE}/verdicts/<task>-a<N>.json — коммит запрещён`)
+      requireApproval(taskId, "commit", "коммит")
       const verdict = readJson<any>(found.path, null)
       if (!verdict) deny("вердикт повреждён — коммит запрещён")
       const sealIssue = verifySeal("verdicts", taskId, found.attempt)
@@ -341,11 +528,15 @@ const plugin: Plugin = async ({ directory }) => {
 
     if (role === "lead") {
       const foreign = subcommands.filter((sub) => !GIT_LEAD_SUBCOMMANDS.has(sub) && sub !== "commit")
-      if (foreign.length > 0) deny(`лиду разрешены git status/diff/log/show/add/commit, получено: ${foreign.join(", ")}`)
+      if (foreign.length > 0) {
+        deny(`лиду разрешены git status/diff/log/show/add/commit/push и работа с ветками, получено: ${foreign.join(", ")}`)
+      }
+      if (/\bgh\s+/.test(command)) checkGh(command)
       if (subcommands.includes("commit")) {
         checkCommit(command)
         return
       }
+      if (subcommands.includes("push")) checkPush()
       if (WRITE_SIGNAL.test(command) && /verdicts|rework/.test(command)) {
         deny("доказательства (verdicts/rework) неизменяемы — правка запрещена")
       }
@@ -353,6 +544,7 @@ const plugin: Plugin = async ({ directory }) => {
       return
     }
 
+    if (/\bgh\s+/.test(command)) deny(`роль ${role} не управляет GitHub`)
     if (nonRead.length > 0) deny(`git-мутации запрещены роли ${role}: ${nonRead.join(", ")}`)
     if ((role === "architect" || role === "reviewer") && WRITE_SIGNAL.test(command)) deny(`роль ${role} не выполняет мутирующие команды`)
     if (role === "developer" && command.includes(PIPELINE)) deny("разработчику запрещён доступ к .pipeline/ через bash")
@@ -456,6 +648,7 @@ const plugin: Plugin = async ({ directory }) => {
       if (role === "lead") {
         await applyReportMode(text)
         applyRouteHint(text)
+        applyApprovals(text)
       }
     },
     "permission.ask": async (input, output) => {
@@ -476,7 +669,7 @@ const plugin: Plugin = async ({ directory }) => {
       }
       if (role === "lead" && isDispatchTool(input.tool)) checkDispatch(args)
     },
-    "tool.execute.after": async (input) => {
+    "tool.execute.after": async (input, output) => {
       const role = roles.get(input.sessionID)
       if (!role) return
       const args: any = input.args ?? {}
@@ -484,6 +677,9 @@ const plugin: Plugin = async ({ directory }) => {
         if (role !== "lead") return
         const command = String(args?.command ?? "")
         if (/\bgit\s+add\b/.test(command)) await recordCandidate()
+        if (/\bgit\s+commit\b/.test(command)) await recordCommit(command)
+        if (/\bgh\s+pr\s+create\b/.test(command)) recordPullRequest(output)
+        if (/\bgh\s+pr\s+merge\b/.test(command)) await recordMerge()
         return
       }
       if (MUTATING_TOOLS.has(input.tool)) {
