@@ -33,7 +33,9 @@ const GIT_LEAD_SUBCOMMANDS = new Set([
   "fetch",
   "pull",
   "ls-remote",
+  "remote",
 ])
+const BANNED_GIT_REMOTE = /\bgit\s+remote\s+(?!(-v|show)\b)\S/
 const GIT_FLAGS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"])
 const COMMIT_BANNED = /(?:^|\s)(--amend|--all|-a|--patch|-p)(?=\s|$)/
 const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
@@ -527,6 +529,7 @@ const plugin: Plugin = async ({ directory }) => {
     const nonRead = subcommands.filter((sub) => !GIT_READ_SUBCOMMANDS.has(sub))
 
     if (role === "lead") {
+      if (BANNED_GIT_REMOTE.test(command)) deny("git remote разрешён только на чтение: `git remote -v` или `git remote show`")
       const foreign = subcommands.filter((sub) => !GIT_LEAD_SUBCOMMANDS.has(sub) && sub !== "commit")
       if (foreign.length > 0) {
         deny(`лиду разрешены git status/diff/log/show/add/commit/push и работа с ветками, получено: ${foreign.join(", ")}`)

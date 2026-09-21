@@ -43,6 +43,8 @@ permission:
     "git fetch*": allow
     "git pull*": allow
     "git ls-remote*": allow
+    "git remote -v*": allow
+    "git remote show*": allow
   skill:
     "*": deny
     "gh": allow
