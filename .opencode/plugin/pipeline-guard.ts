@@ -48,7 +48,7 @@ const ROUTE_SIGNALS: Array<{ route: string; re: RegExp }> = [
   { route: "standard", re: /(\/standard\b|skip the architect|without the architect|without design|shortened route)/i },
   { route: "assisted", re: /(\/assisted\b|i\'?ll fix it myself|i\'?ll do it myself|i\'?ll patch it myself|without the developer|fix it myself)/i },
 ]
-const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
+const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|(?:^|[\s0-9&])>>?\s*(?!\/dev\/null)[^&\s]/
 function regexFromIdFormat(idFormat: string): string {
   let pattern = idFormat
   for (const [token, re] of [["YYYYMMDD", "\\d{8}"], ["YYMMDD", "\\d{6}"], ["NN", "\\d{2}"], ["N", "\\d+"]] as const) {
