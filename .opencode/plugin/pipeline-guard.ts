@@ -311,7 +311,7 @@ const plugin: Plugin = async ({ directory }) => {
       }
       for (const signal of APPROVAL_SIGNALS) {
         if (!signal.re.test(text)) continue
-        const key = signal.op === "repo" ? "_repo" : taskId || "_general"
+        const key = signal.op === "repo" || signal.op === "bootstrap" ? "_repo" : taskId || "_general"
         write(key, (data) => {
           data[signal.op] = new Date().toISOString()
         })
@@ -327,7 +327,7 @@ const plugin: Plugin = async ({ directory }) => {
       }
       for (const signal of REVOKE_SIGNALS) {
         if (!signal.re.test(text)) continue
-        const key = signal.op === "repo" ? "_repo" : taskId || "_general"
+        const key = signal.op === "repo" || signal.op === "bootstrap" ? "_repo" : taskId || "_general"
         write(key, (data) => {
           delete data[signal.op]
         })
@@ -369,15 +369,16 @@ const plugin: Plugin = async ({ directory }) => {
     if (/\bgh\s+pr\s+create\b/.test(command)) {
       if (!active) deny("no active task for creating a PR")
       const type = String(active!.state.type ?? "")
-      const expectedBase = expectedPrBase(type)
       const base = commandArg(command, "--base")
-      if (!base) deny(`PR must specify --base ${expectedBase}`)
-      if (base !== expectedBase) deny(`PR base must be ${expectedBase} for type "${type}", got "${base}"`)
       if (type === "release") {
         const tag = releaseTag(active!.state)
         if (!tag) deny("release task has no version: set state.version")
-        const head = commandArg(command, "--head") || currentBranch()
         const backmerge = Boolean(active!.state.pr_number)
+        const expectedBase = backmerge ? gitCfg.dev : gitCfg.main
+        if (!base) deny(`PR must specify --base ${expectedBase}`)
+        if (base !== expectedBase) deny(`release PR base must be ${expectedBase}, got "${base}"`)
+        const headArg = commandArg(command, "--head")
+        const head = !headArg || headArg === "HEAD" ? currentBranch() : headArg
         const allowed = backmerge ? [gitCfg.main] : [`${branchPrefixes.release}/${tag}`]
         if (!allowed.includes(head)) {
           deny(`release PR head must be ${allowed.join(" or ")}, got "${head}"`)
@@ -385,6 +386,9 @@ const plugin: Plugin = async ({ directory }) => {
         requireApproval(taskId, "pr", "PR creation")
         return
       }
+      const expectedBase = expectedPrBase(type)
+      if (!base) deny(`PR must specify --base ${expectedBase}`)
+      if (base !== expectedBase) deny(`PR base must be ${expectedBase} for type "${type}", got "${base}"`)
       requireApproval(taskId, "pr", "PR creation")
       const head = headCommit()
       if (!head || head !== active!.state.delivered_commit) {
