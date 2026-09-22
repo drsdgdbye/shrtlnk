@@ -38,24 +38,30 @@ const GIT_LEAD_SUBCOMMANDS = new Set([
 const BANNED_GIT_REMOTE = /\bgit\s+remote\s+(?!(-v|show)\b)\S/
 const GIT_FLAGS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"])
 const COMMIT_BANNED = /(?:^|\s)(--amend|--all|-a|--patch|-p)(?=\s|$)/
-const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
+const DEFAULT_ID_FORMAT = "DRS-YYMMDD-NN"
 const ROLE_MARKER = /ROLE:\s*(lead|architect|developer|reviewer)\b/i
 const VERBOSE_SIGNAL = /(\/verbose\b|verbose|in more detail|in detail|more details|in simple terms|simply|for a beginner|eli5|break it down)/i
 const BRIEF_SIGNAL = /(\/brief\b|brief|shorter|no details|normal mode|keep it brief)/i
-const ROUTE_VALUES = new Set(["full", "standard", "assisted"])
+const ROUTE_VALUES = new Set(["full", "standard", "assisted", "release"])
 const ROUTE_SIGNALS: Array<{ route: string; re: RegExp }> = [
   { route: "full", re: /(\/full\b|full route|with design)/i },
   { route: "standard", re: /(\/standard\b|skip the architect|without the architect|without design|shortened route)/i },
   { route: "assisted", re: /(\/assisted\b|i\'?ll fix it myself|i\'?ll do it myself|i\'?ll patch it myself|without the developer|fix it myself)/i },
 ]
 const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
-const VERDICT_FILE = /^T-\d{8}-[A-Za-z0-9-]+-a\d+\.(md|json)$/
-const VERDICT_JSON = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.json$/
-const REWORK_FILE = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.md$/
-const APPROVAL_OPS = ["repo", "commit", "push", "pr", "merge", "release"] as const
+function regexFromIdFormat(idFormat: string): string {
+  let pattern = idFormat
+  for (const [token, re] of [["YYYYMMDD", "\\d{8}"], ["YYMMDD", "\\d{6}"], ["NN", "\\d{2}"], ["N", "\\d+"]] as const) {
+    pattern = pattern.split(token).join(re)
+  }
+  return pattern
+}
+
+const APPROVAL_OPS = ["repo", "bootstrap", "commit", "push", "pr", "merge", "release"] as const
 type ApprovalOp = (typeof APPROVAL_OPS)[number]
 const APPROVAL_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
   { op: "repo", re: /(\/approve\s+repo\b|i approve creating the repo(?:sitory)?|create the repo(?:sitory)?|you can create the repo)/i },
+  { op: "bootstrap", re: /(\/approve\s+bootstrap\b|i approve the repository setup|set up the repository)/i },
   { op: "commit", re: /(\/approve\s+commit\b|i approve the commit|you can commit|commit it)/i },
   { op: "push", re: /(\/approve\s+push\b|i approve the push|you can push|push it)/i },
   { op: "pr", re: /(\/approve\s+pr\b|i approve the pr|create the pr|open a pr|you can (?:open|create) a pr)/i },
@@ -64,6 +70,7 @@ const APPROVAL_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
 ]
 const REVOKE_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
   { op: "repo", re: /(\/revoke\s+repo\b|i revoke the repo(?:sitory)?(?: creation)?)/i },
+  { op: "bootstrap", re: /(\/revoke\s+bootstrap\b|i revoke the repository setup)/i },
   { op: "commit", re: /(\/revoke\s+commit\b|i revoke the commit)/i },
   { op: "push", re: /(\/revoke\s+push\b|i revoke the push)/i },
   { op: "pr", re: /(\/revoke\s+pr\b|i revoke the pr)/i },
@@ -111,6 +118,56 @@ function gitSubcommands(command: string): string[] {
 
 const plugin: Plugin = async ({ directory }) => {
   const dir = resolve(directory)
+  const parseJsonFile = (path: string): any => {
+    try {
+      return JSON.parse(readFileSync(path, "utf8"))
+    } catch {
+      return null
+    }
+  }
+  const teamConfig =
+    parseJsonFile(join(dir, PIPELINE, "team.json")) ?? parseJsonFile(join(dir, "beach-team.json"))
+  const gitCfg = {
+    model: String(teamConfig?.git?.model ?? "trunk"),
+    main: String(teamConfig?.git?.main ?? "main"),
+    dev: String(teamConfig?.git?.dev ?? "dev"),
+  }
+  const idFormat = String(teamConfig?.tasks?.id_format ?? DEFAULT_ID_FORMAT)
+  const idPattern = String(teamConfig?.tasks?.id_pattern ?? regexFromIdFormat(idFormat))
+  const branchPrefixes: Record<string, string> = {
+    feat: String(teamConfig?.tasks?.branch_prefixes?.feat ?? "feat"),
+    fix: String(teamConfig?.tasks?.branch_prefixes?.fix ?? "fix"),
+    chore: String(teamConfig?.tasks?.branch_prefixes?.chore ?? "chore"),
+    hotfix: String(teamConfig?.tasks?.branch_prefixes?.hotfix ?? "hotfix"),
+    release: String(teamConfig?.tasks?.branch_prefixes?.release ?? "release"),
+  }
+  const TASK_ID = new RegExp(`\\b${idPattern}\\b`)
+  const VERDICT_FILE = new RegExp(`^${idPattern}-a\\d+\\.(md|json)$`)
+  const VERDICT_JSON = new RegExp(`^(${idPattern})-a(\\d+)\\.json$`)
+  const REWORK_FILE = new RegExp(`^(${idPattern})-a(\\d+)\\.md$`)
+
+  const releaseTag = (state: any): string => {
+    const version = String(state?.version ?? "").trim()
+    if (!version) return ""
+    return version.startsWith("v") ? version : `v${version}`
+  }
+
+  const expectedBranch = (state: any): string => {
+    const type = String(state?.type ?? "")
+    if (type === "release") return `${branchPrefixes.release}/${releaseTag(state)}`
+    const prefix = branchPrefixes[type] ?? type
+    return prefix ? `${prefix}/${String(state?.task_id ?? "")}` : ""
+  }
+
+  const expectedPrBase = (type: string): string => {
+    if (gitCfg.model !== "simple-gitflow") return gitCfg.main
+    return type === "hotfix" || type === "release" ? gitCfg.main : gitCfg.dev
+  }
+
+  const commandArg = (command: string, flag: string): string => {
+    const match = command.match(new RegExp(`(?:^|\\s)${flag}\\s+("[^"]*"|'[^']*'|\\S+)`))
+    return match ? match[1].replace(/^["']|["']$/g, "") : ""
+  }
   const roles = new Map<string, Role>()
 
   const deny = (message: string): never => {
@@ -278,12 +335,23 @@ const plugin: Plugin = async ({ directory }) => {
     } catch {}
   }
 
-  const checkPush = () => {
+  const checkPush = (command: string) => {
     const active = activeState()
-    if (!active) deny("no active task — push is forbidden")
-    const taskId = String(active!.state.task_id ?? "")
     const branch = currentBranch()
-    if (branch !== `task/${taskId}`) deny(`push is only allowed from branch task/${taskId}, current: ${branch || "unknown"}`)
+    if (!active) {
+      const bootstrap = new RegExp(
+        `^git\\s+push\\s+(?:-u|--set-upstream)\\s+origin\\s+(?:${gitCfg.main}|${gitCfg.dev})\\s*$`,
+      )
+      if (!bootstrap.test(command.trim())) {
+        deny(`no active task — push is forbidden (bootstrap allows only "git push -u origin ${gitCfg.main}|${gitCfg.dev}")`)
+      }
+      requireApproval("_repo", "bootstrap", "repository setup")
+      return
+    }
+    const taskId = String(active!.state.task_id ?? "")
+    const expected = expectedBranch(active!.state)
+    if (!expected) deny("cannot derive the task branch: set state.type and, for release, state.version")
+    if (branch !== expected) deny(`push is only allowed from branch ${expected}, current: ${branch || "unknown"}`)
     requireApproval(taskId, "push", "push")
     const head = headCommit()
     if (!head || head !== active!.state.delivered_commit) {
@@ -300,6 +368,23 @@ const plugin: Plugin = async ({ directory }) => {
     }
     if (/\bgh\s+pr\s+create\b/.test(command)) {
       if (!active) deny("no active task for creating a PR")
+      const type = String(active!.state.type ?? "")
+      const expectedBase = expectedPrBase(type)
+      const base = commandArg(command, "--base")
+      if (!base) deny(`PR must specify --base ${expectedBase}`)
+      if (base !== expectedBase) deny(`PR base must be ${expectedBase} for type "${type}", got "${base}"`)
+      if (type === "release") {
+        const tag = releaseTag(active!.state)
+        if (!tag) deny("release task has no version: set state.version")
+        const head = commandArg(command, "--head") || currentBranch()
+        const backmerge = Boolean(active!.state.pr_number)
+        const allowed = backmerge ? [gitCfg.main] : [`${branchPrefixes.release}/${tag}`]
+        if (!allowed.includes(head)) {
+          deny(`release PR head must be ${allowed.join(" or ")}, got "${head}"`)
+        }
+        requireApproval(taskId, "pr", "PR creation")
+        return
+      }
       requireApproval(taskId, "pr", "PR creation")
       const head = headCommit()
       if (!head || head !== active!.state.delivered_commit) {
@@ -310,12 +395,23 @@ const plugin: Plugin = async ({ directory }) => {
     if (/\bgh\s+pr\s+merge\b/.test(command)) {
       if (!active) deny("no active task for merge")
       requireApproval(taskId, "merge", "merge")
+      const type = String(active!.state.type ?? "")
+      if (type === "release") {
+        if (!active!.state.pr_number) deny("release merge only for a PR created through the pipeline")
+        if (active!.state.merge_commit && active!.state.backmerge_at) deny("release task already finished both merges")
+        return
+      }
       if (!active!.state.pr_number) deny("merge only for a PR created through the pipeline")
       return
     }
     if (/\bgh\s+release\s+create\b/.test(command)) {
+      if (!active) deny("gh release create requires an active release task")
+      const type = String(active!.state.type ?? "")
+      if (type !== "release") deny("gh release create is only allowed for release tasks")
       requireApproval(taskId || "_general", "release", "release")
-      if (!active || !active.state.merge_commit) deny("release only after merge")
+      if (!active!.state.merge_commit) deny("release only after merge into main")
+      const tag = releaseTag(active!.state)
+      if (tag && !command.includes(tag)) deny(`release tag must match the task version ${tag}`)
       return
     }
     if (/\bgh\s+workflow\s+run\b/.test(command)) deny("gh workflow run is outside the mandate")
@@ -382,8 +478,13 @@ const plugin: Plugin = async ({ directory }) => {
     if (!match) return
     const state = readJson<any>(active.path, null)
     if (!state) return
-    state.pr_url = match[1]
-    state.pr_number = Number(match[2])
+    if (String(state.type) === "release" && state.pr_number) {
+      state.backmerge_pr = Number(match[2])
+      state.backmerge_pr_url = match[1]
+    } else {
+      state.pr_url = match[1]
+      state.pr_number = Number(match[2])
+    }
     state.updated_at = new Date().toISOString()
     writeJson(active.path, state)
   }
@@ -405,7 +506,11 @@ const plugin: Plugin = async ({ directory }) => {
       } catch {}
     }
     await mutateState(active.path, (state) => {
-      state.merge_commit = mergeCommit || state.merge_commit || "merged"
+      if (state.merge_commit) {
+        state.backmerge_at = new Date().toISOString()
+        return
+      }
+      state.merge_commit = mergeCommit || "merged"
       state.merged_at = new Date().toISOString()
     })
   }
@@ -501,7 +606,7 @@ const plugin: Plugin = async ({ directory }) => {
     if (COMMIT_BANNED.test(command)) deny("commit with --amend/-a/--patch is forbidden")
     const taskId = command.match(TASK_ID)?.[0]
     if (!taskId) {
-      deny("commit message must contain task_id (T-YYYYMMDD-NN)")
+      deny(`commit message must contain task_id (${idFormat})`)
     } else {
       const found = latestVerdict(taskId)
       if (!found) deny(`no verdict ${PIPELINE}/verdicts/<task>-a<N>.json — commit is forbidden`)
@@ -539,7 +644,7 @@ const plugin: Plugin = async ({ directory }) => {
         checkCommit(command)
         return
       }
-      if (subcommands.includes("push")) checkPush()
+      if (subcommands.includes("push")) checkPush(command)
       if (WRITE_SIGNAL.test(command) && /verdicts|rework/.test(command)) {
         deny("evidence (verdicts/rework) is immutable — editing is forbidden")
       }
@@ -564,7 +669,7 @@ const plugin: Plugin = async ({ directory }) => {
       const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
       const taskId = prompt.match(TASK_ID)?.[0]
       if (!taskId) {
-        deny("dispatch must contain a task_id of the form T-YYYYMMDD-NN")
+        deny(`dispatch must contain a task_id matching ${idFormat}`)
       } else {
         if ((target === "developer" || target === "reviewer") && !existsSync(briefFile(taskId))) {
           deny(`no brief ${PIPELINE}/briefs/${taskId}.md — no dispatch`)
@@ -572,6 +677,9 @@ const plugin: Plugin = async ({ directory }) => {
         const state = readJson<any>(stateFile(taskId), null)
         if ((target === "developer" || target === "reviewer") && !state) {
           deny(`no state ${PIPELINE}/state/${taskId}.json`)
+        }
+        if (state && target === "reviewer" && String(state.type ?? "") === "release") {
+          deny("release tasks do not dispatch a reviewer — the lead drives the release flow")
         }
         if (state && target === "reviewer" && state.dispatch_open === true) {
           deny("candidate is not frozen: before dispatching the reviewer, freeze the snapshot with git add")
@@ -589,7 +697,10 @@ const plugin: Plugin = async ({ directory }) => {
           if (decision === "stop") deny("the human stopped the task after infrastructure failures")
           const route = routeOf(state)
           if (!ROUTE_VALUES.has(route)) {
-            deny(`invalid route "${route}" — allowed: full, standard, assisted`)
+            deny(`invalid route "${route}" — allowed: full, standard, assisted, release`)
+          }
+          if (route === "release" || String(state.type) === "release") {
+            deny("release tasks do not dispatch a developer or a reviewer — the lead drives the release flow")
           }
           if (route === "assisted") {
             deny("route assisted: the human makes the change — developer dispatch is forbidden")

@@ -10,9 +10,11 @@
     "architect"
   ],
   "routes": {
-    "feature": "full",
+    "feat": "full",
     "fix": "standard",
-    "chore": "standard"
+    "chore": "standard",
+    "hotfix": "standard",
+    "release": "release"
   },
   "models": {
     "default": "deepseek/deepseek-flash",
@@ -61,6 +63,21 @@
         "go doc*",
         "go list*"
       ]
+    }
+  },
+  "git": {
+    "model": "simple-gitflow",
+    "main": "main",
+    "dev": "dev"
+  },
+  "tasks": {
+    "id_format": "DRS-YYMMDD-NN",
+    "branch_prefixes": {
+      "feat": "feat",
+      "fix": "fix",
+      "chore": "chore",
+      "hotfix": "hotfix",
+      "release": "release"
     }
   }
 }

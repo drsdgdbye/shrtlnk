@@ -7,7 +7,8 @@ Configuration — `beach-team.json`; resolution for dispatch — `.pipeline/team
 
 - Stack: `go`.
 - Core (always): lead, developer, reviewer. Modules: architect.
-- Default routes: feature → full, fix → standard, chore → standard.
+- Default routes: feat → full, fix → standard, chore → standard, hotfix → standard, release → release.
+- Git model: `simple-gitflow` — main: `main`, dev: `dev`; task id format: `DRS-YYMMDD-NN` (pattern `DRS-\d{6}-\d{2}`).
 - Required project checks:
 - `gofmt -l .`
 - `go vet ./...`
@@ -26,7 +27,7 @@ GAP / budget / timeout → ESCALATE
 
 | State | Event | Condition | New state |
 |---|---|---|---|
-| GOAL | task accepted, `task_id` assigned | task type determined | DESIGN (feature) or BRIEF |
+| GOAL | task accepted, `task_id` assigned | task type determined | DESIGN (feat) or BRIEF |
 | DESIGN | design ready | `.pipeline/designs/<task_id>.md` written | APPROVAL |
 | APPROVAL | human decision | "I approve" received | BRIEF |
 | BRIEF | brief written | mandatory fields filled | DISPATCH |
@@ -42,16 +43,26 @@ GAP / budget / timeout → ESCALATE
 The lead maintains the status in `.pipeline/state/<task_id>.json`. Absence of status is not "almost
 ready" but absence of state.
 
-### 1.1. Task classes and routes
+### 1.1. Task types and routes
 
-- `feature` — by default the `full` route (architect → developer → reviewer); with the architect
-  module disabled or by the human's word ("skip the architect") — `standard`.
+Task types: `feat`, `fix`, `chore`, `hotfix`, `release`; task ids follow `DRS-YYMMDD-NN`
+(strictly the configured format). The route is determined by the type: `routes.<type>` from
+`.pipeline/team.json`; the human's words or the `/assisted` command can override it.
+
+- `feat` — new functionality; by default the `full` route (architect → developer → reviewer); with the
+  architect module disabled or by the human's word ("skip the architect") — `standard`.
 - `fix` — a point fix: the `standard` route (developer → reviewer), the brief is minimal but
   mandatory; the reviewer checks the narrow criterion and the absence of side changes.
 - `chore` — configuration, documentation, repository infrastructure; requirements as for `fix`.
-- `assisted` — the human makes the edit, the reviewer verifies, the lead commits. Enabled by the words
-  "I'll fix it myself", "without the developer", `/assisted`; developer dispatch on this route is forbidden
-  by the plugin, and a snapshot fixed by the human counts as an attempt.
+- `hotfix` — an urgent fix of the stable branch: the `standard` route; the branch is forked from main.
+- `release` — a release task: the `release` route, no developer or reviewer dispatch; the lead drives
+  the release PR, the tag and the back-merge (§14).
+- `assisted` — a route, not a type: the human makes the edit, the reviewer verifies, the lead commits.
+  Enabled by the words "I'll fix it myself", "without the developer", `/assisted`; developer dispatch on
+  this route is forbidden by the plugin, and a snapshot fixed by the human counts as an attempt.
+
+Branch naming follows the type (`feat/<task_id>`, `fix/<task_id>`, `chore/<task_id>`,
+`hotfix/<task_id>`, `release/<tag>`); bases, PR targets and merge rules — §14.
 
 The light track does not cancel the gates: `task_id`, brief, independent verification and commit by the current PASS
 apply. Required checks — from `checks` in `beach-team.json`.
@@ -74,11 +85,13 @@ apply. Required checks — from `checks` in `beach-team.json`.
 └── pipeline-log.md
 ```
 
-- `task_id` — `T-YYYYMMDD-NN` (for example, `T-20260919-01`), assigned by the lead.
+- `task_id` — `DRS-YYMMDD-NN` (for example, `DRS-260922-01`), assigned by the lead; the
+  format comes from `tasks.id_format` in `beach-team.json`.
 - `attempt_id` — `<task_id>-a<N>`, N = 1..3.
 - `finding_id` — `F-<number>` within the verdict.
 - The brief is edited only by the lead and only before dispatch. Fixing a brief error after FAIL is formalized
-  as `brief v2` with a note in state; the old verdict is annulled.
+  as `brief v2` with a note in state; the old verdict stays sealed and is superseded by the new
+  brief, the attempt is spent (§5).
 
 ## 3. Candidate and hash
 
@@ -212,23 +225,56 @@ next — in simple language, without jargon.
   `.pipeline/templates/handoff.md`; the path is recorded in state (`handoff_file`). The new lead
   resumes by the Resume section, not by a retelling in chat.
 
-## 14. Delivery and GitHub
+## 14. Git model and delivery
 
-Delivery route: `commit → push → PR → merge → release`. **Each mutating step simultaneously requires:**
-a sealed reviewer PASS tied to the delivered commit, and explicit human approval
+The model is set by `git.model` in `beach-team.json`; long-lived branches are `main` (stable,
+releases) and `dev` (integration).
+
+**simple-gitflow** — typed branches:
+
+| Type | Branch | Forked from | PR base | Merge |
+|---|---|---|---|---|
+| feat | `feat/<task_id>` | dev | dev | squash |
+| fix | `fix/<task_id>` | dev | dev | squash |
+| chore | `chore/<task_id>` | dev | dev | squash |
+| hotfix | `hotfix/<task_id>` | main | main | merge commit |
+| release | `release/<tag>` | dev | main | merge commit |
+
+- Task ids follow `DRS-YYMMDD-NN`; only the configured format is accepted for new tasks (old
+  ids stay in history and are not rewritten).
+- Release task: the human gives the version ("release v0.1.0"); the lead creates `release/v0.1.0`
+  from dev, opens a PR to main (merge commit, the branch is kept), merges it, runs
+  `gh release create v0.1.0 --target main --generate-notes`, and performs a back-merge: a PR
+  main → dev merged with a merge commit so that dev does not lag behind.
+- Hotfix: a normal task forked from main with the PR into main; after the merge — release and
+  back-merge as for a release.
+- Direct pushes to main/dev are forbidden.
+
+**trunk** — task branches are forked from the default branch, PRs target it, merges are squashes,
+releases go through `gh release create` after the merge. The PR base in the table above becomes the
+default branch.
+
+**Delivery chain**: `commit → push → PR → merge → release`. Every mutating step simultaneously
+requires a sealed reviewer PASS tied to the delivered commit and the human's explicit approval
 (`.pipeline/approvals/<task_id>.json`; the file is written only by the plugin).
 
-- The task branch is `task/<task_id>`; push only from it and only of the verified commit
-  (`delivered_commit`).
-- `gh pr create` — after push; the PR number is written to state. Default merge:
-  `gh pr merge <n> --squash --delete-branch`; after merge `merge_commit` is written to state.
-- `gh release create` — only after merge.
-- Bootstrap: `gh repo create` — a separate `repo` approval (`.pipeline/approvals/_repo.json`).
+- The lead creates the typed branch before development and pushes only it and only the verified
+  commit (`delivered_commit`).
+- The PR base is not invented: in simple-gitflow it is `dev` (feat/fix/chore) or `main`
+  (hotfix/release); a wrong or missing `--base` is rejected by the plugin.
+- Task PRs: `gh pr merge <n> --squash --delete-branch`; release and back-merge PRs:
+  `gh pr merge <n> --merge`.
+- `gh release create <tag>` — only after the release merge into main; the tag must match the task's
+  `version`.
+- Repository bootstrap (first setup): with the `bootstrap` approval — `git push -u origin main` and
+  `git push -u origin dev` (creating branches only, no active task required). `gh repo create` keeps
+  its separate `repo` approval.
 - CI monitoring is read-only (`gh pr checks`, `gh run view/list`) without approval; `gh workflow run`
   and a mutating `gh api` are forbidden.
 - Approvals: "I approve the commit / push / pr / merge / release / repo", "I approve the delivery"
-  (= commit + push + PR), the commands `/approve commit|push|pr|merge|release|repo|delivery`; revocation — "I revoke the commit", `/revoke <op>`.
-  Negations ("don't commit") are not recognized: use the revocation.
+  (= commit + push + PR), "I approve the repository setup" (bootstrap); the commands
+  `/approve commit|push|pr|merge|release|repo|bootstrap|delivery`; revocation — "I revoke the commit",
+  `/revoke <op>`. Negations ("don't commit") are not recognized: use the revocation.
 
 ## 15. Changing the rules
 

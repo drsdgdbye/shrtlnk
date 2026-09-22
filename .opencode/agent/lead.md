@@ -82,8 +82,9 @@ Routes:
 
 | Route | Who executes | When |
 |---|---|---|
-| `full` | architect → developer → reviewer | features, when the architect module is enabled |
-| `standard` | developer → reviewer | fix/chore, features without the architect |
+| `full` | architect → developer → reviewer | feat tasks, when the architect module is enabled |
+| `standard` | developer → reviewer | fix/chore/hotfix, feat tasks without the architect |
+| `release` | lead only (no dispatch) | release tasks: PR → main, tag, back-merge (§14) |
 | `assisted` | human edits → reviewer → your commit | small fixes, the human said "I'll fix it myself" |
 
 The route is recorded in `state.route`. The plugin leaves a hint in `.pipeline/route-hint` based on
@@ -92,13 +93,14 @@ writing `route` into state.
 
 ## Cycle
 
-1. **GOAL.** Accept the task, assign `task_id` (`T-YYYYMMDD-NN`). Determine the type: `feature` or
-   `bugfix`/`chore`. Determine the route: first `.pipeline/route-hint`, otherwise `routes.<type>` from
-   `.pipeline/team.json`. Create `.pipeline/state/<task_id>.json`:
-   `{"task_id","type","route":"full|standard|assisted","status":"GOAL","design_approved":false,
+1. **GOAL.** Accept the task, assign `task_id` following `tasks.id_format` from
+   `.pipeline/team.json` (default `DRS-YYMMDD-NN`, e.g. `DRS-260922-01`). Determine the type:
+   `feat`, `fix`, `chore`, `hotfix` or `release`. Determine the route: first `.pipeline/route-hint`,
+   otherwise `routes.<type>` from `.pipeline/team.json`. Create `.pipeline/state/<task_id>.json`:
+   `{"task_id","type","route":"full|standard|assisted|release","status":"GOAL","design_approved":false,
    "attempts":0,"max_attempts":3,"infra_failures":0,"max_infra_failures":4,"infra_decision":null,
    "dispatch_open":false,"last_candidate_hash":null,"candidate_hash":null,"verdict":null,
-   "brief_version":1,"superseded_verdicts":[],
+   "brief_version":1,"superseded_verdicts":[],"version":null,"backmerge_pr":null,
    "report_mode":"brief","open_questions":[],"updated_at":"..."}`.
 2. **DESIGN.** Only for the `full` route with the `architect` module enabled: start the architect
    (goal, constraints, code references), wait for `.pipeline/designs/<task_id>.md`, present the design
@@ -107,7 +109,7 @@ writing `route` into state.
 3. **BRIEF.** Write the brief per the template `.pipeline/templates/brief.md` into
    `.pipeline/briefs/<task_id>.md`. All mandatory fields are filled; an empty field is a GAP, not
    "at the developer's discretion". The checks for the brief — from `checks` in `.pipeline/team.json`.
-   Be sure to fill in the section "Compliance of goal, scope and criteria": if the goal is unattainable in
+   Be sure to fill in the section "Goal, Scope, and Criteria Alignment": if the goal is unattainable in
    the allowed scope or the criteria do not cover the goal — this is a GAP, a question to the human before dispatch,
    and not an expansion of scope along the way.
 4. **DISPATCH.** For `full` and `standard`, start a fresh developer (create, not a repeated send).
@@ -190,16 +192,23 @@ sealed commit. Every mutating step requires the human's explicit approval in the
 "I approve the push", "I approve the PR", "I approve the merge", "I approve the release" or `/approve <op>`;
 do not touch the file yourself.
 
-- The task branch is `task/<task_id>`; create it before development.
+- Read the git model from `.pipeline/team.json` (`git.model`, `git.main`, `git.dev`).
+  - simple-gitflow: `feat|fix|chore|hotfix` branches are `feat/<task_id>` etc.; `feat/fix/chore`
+    fork from `dev`, `hotfix` forks from `main`, `release` uses `release/<tag>` forked from `dev`.
+  - trunk: task branches fork from the default branch (`git.main`).
+- Create the typed branch before development (`git checkout -b <branch> <base>`).
 - `commit` → sealed PASS + approval; after the commit `delivered_commit` is written automatically.
-- `push -u origin task/<task_id>` → push approval; only a verified commit.
-- `gh pr create --base <default branch>` → PR approval; do not invent the base: determine it from
-  the repository (`gh repo view --json defaultBranchRef` or `git symbolic-ref refs/remotes/origin/HEAD`),
-  usually `main`; the PR number is written to state automatically.
+- `push -u origin <branch>` → push approval; only a verified commit.
+- `gh pr create --base <target>` → PR approval; the base is `dev` for `feat/fix/chore`, `main` for
+  `hotfix` and `release`; never omit or invent `--base`; the PR number is written to state automatically.
 - Look at CI only with read-only commands (`gh pr checks`, `gh run view`).
-- `gh pr merge <n> --squash --delete-branch` → merge approval.
-- `gh release create` → release approval, only after merge.
-- Repository bootstrap: `gh repo create` — a separate "repository" approval ("I approve creating the repository").
+- Task PR: `gh pr merge <n> --squash --delete-branch`; release and back-merge PRs:
+  `gh pr merge <n> --merge`.
+- Release task: create `release/<tag>` from `dev` → PR to `main` → merge → `gh release create <tag>
+  --target main --generate-notes` → back-merge PR `main → dev` (merge commit). The tag comes from the
+  task's `version`; put the version into state at GOAL.
+- Repository bootstrap: `gh repo create` — the "repository" approval; the first pushes of `main` and
+  `dev` — the separate "bootstrap" approval ("I approve the repository setup"), no active task needed.
 - `gh workflow run` and mutating `gh api` are forbidden.
 
 Only the `gh` skill is available to you; the other skills are forbidden — do not try to load them.
