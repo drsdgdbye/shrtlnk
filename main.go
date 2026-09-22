@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"yt_dw/config"
+	"yt_dw/internal/pagetitle"
 	"yt_dw/internal/redirect"
 	"yt_dw/internal/shortener"
 	"yt_dw/internal/telegram"
@@ -45,7 +46,10 @@ func run() error {
 		}
 	}()
 
-	svc := shortener.NewService(store)
+	svc := shortener.NewService(store, pagetitle.New(nil), logger)
+	// Wait зарегистрирован после store.Close, поэтому LIFO сначала дожидается
+	// фоновых записей заголовков и только затем закрывает БД.
+	defer svc.Wait()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
