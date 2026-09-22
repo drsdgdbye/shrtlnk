@@ -40,13 +40,13 @@ const GIT_FLAGS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "-
 const COMMIT_BANNED = /(?:^|\s)(--amend|--all|-a|--patch|-p)(?=\s|$)/
 const TASK_ID = /\bT-\d{8}-[A-Za-z0-9-]+\b/
 const ROLE_MARKER = /ROLE:\s*(lead|architect|developer|reviewer)\b/i
-const VERBOSE_SIGNAL = /(подробн|проще|попроще|по-простому|простыми словами|простым языком|для новичк|eli5|разжуй|verbose)/i
-const BRIEF_SIGNAL = /(кратко|покороче|без подробност|обычн(?:ый|ом) режим|\/brief)/i
+const VERBOSE_SIGNAL = /(\/verbose\b|verbose|in more detail|in detail|more details|in simple terms|simply|for a beginner|eli5|break it down)/i
+const BRIEF_SIGNAL = /(\/brief\b|brief|shorter|no details|normal mode|keep it brief)/i
 const ROUTE_VALUES = new Set(["full", "standard", "assisted"])
 const ROUTE_SIGNALS: Array<{ route: string; re: RegExp }> = [
-  { route: "full", re: /(\/full\b|полный маршрут|с дизайном)/i },
-  { route: "standard", re: /(\/standard\b|в обход архитектора|без архитектора|без дизайна|сокращ[её]нн)/i },
-  { route: "assisted", re: /(\/assisted\b|правку вн[её]с сам|правлю сам|я поправлю|без разработчика|сам исправлю|сам внесу)/i },
+  { route: "full", re: /(\/full\b|full route|with design)/i },
+  { route: "standard", re: /(\/standard\b|skip the architect|without the architect|without design|shortened route)/i },
+  { route: "assisted", re: /(\/assisted\b|i\'?ll fix it myself|i\'?ll do it myself|i\'?ll patch it myself|without the developer|fix it myself)/i },
 ]
 const WRITE_SIGNAL = /\bsed\s+-i|\brm\s|\bmv\s|\bcp\s|\btee\b|\bdd\s|\btruncate\b|>>?\s*(?!\/dev\/null)[^&\s]/
 const VERDICT_FILE = /^T-\d{8}-[A-Za-z0-9-]+-a\d+\.(md|json)$/
@@ -55,22 +55,22 @@ const REWORK_FILE = /^(T-\d{8}-[A-Za-z0-9-]+)-a(\d+)\.md$/
 const APPROVAL_OPS = ["repo", "commit", "push", "pr", "merge", "release"] as const
 type ApprovalOp = (typeof APPROVAL_OPS)[number]
 const APPROVAL_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
-  { op: "repo", re: /(\/approve\s+repo|разрешаю\s+репозитор|создавай\s+репозитор|создай\s+репозитор)/i },
-  { op: "commit", re: /(\/approve\s+commit|разрешаю\s+коммит|коммить|можно\s+коммит)/i },
-  { op: "push", re: /(\/approve\s+push|разрешаю\s+пуш|пушь|можно\s+пушить|запуш)/i },
-  { op: "pr", re: /(\/approve\s+pr|разрешаю\s+pr|создавай\s+pr|создай\s+pr|можно\s+pr)/i },
-  { op: "merge", re: /(\/approve\s+merge|разрешаю\s+merge|мержи|можно\s+мержить)/i },
-  { op: "release", re: /(\/approve\s+release|разрешаю\s+релиз|выпускай\s+релиз|создавай\s+релиз)/i },
+  { op: "repo", re: /(\/approve\s+repo\b|i approve creating the repo(?:sitory)?|create the repo(?:sitory)?|you can create the repo)/i },
+  { op: "commit", re: /(\/approve\s+commit\b|i approve the commit|you can commit|commit it)/i },
+  { op: "push", re: /(\/approve\s+push\b|i approve the push|you can push|push it)/i },
+  { op: "pr", re: /(\/approve\s+pr\b|i approve the pr|create the pr|open a pr|you can (?:open|create) a pr)/i },
+  { op: "merge", re: /(\/approve\s+merge\b|i approve the merge|merge it|you can merge)/i },
+  { op: "release", re: /(\/approve\s+release\b|i approve the release|cut a release|you can release)/i },
 ]
 const REVOKE_SIGNALS: Array<{ op: ApprovalOp; re: RegExp }> = [
-  { op: "repo", re: /(\/revoke\s+repo|отзываю\s+репозитор)/i },
-  { op: "commit", re: /(\/revoke\s+commit|отзываю\s+коммит)/i },
-  { op: "push", re: /(\/revoke\s+push|отзываю\s+пуш)/i },
-  { op: "pr", re: /(\/revoke\s+pr|отзываю\s+pr)/i },
-  { op: "merge", re: /(\/revoke\s+merge|отзываю\s+merge)/i },
-  { op: "release", re: /(\/revoke\s+release|отзываю\s+релиз)/i },
+  { op: "repo", re: /(\/revoke\s+repo\b|i revoke the repo(?:sitory)?(?: creation)?)/i },
+  { op: "commit", re: /(\/revoke\s+commit\b|i revoke the commit)/i },
+  { op: "push", re: /(\/revoke\s+push\b|i revoke the push)/i },
+  { op: "pr", re: /(\/revoke\s+pr\b|i revoke the pr)/i },
+  { op: "merge", re: /(\/revoke\s+merge\b|i revoke the merge)/i },
+  { op: "release", re: /(\/revoke\s+release\b|i revoke the release)/i },
 ]
-const UMBRELLA_RE = /(разрешаю\s+поставку|полный\s+цикл\s+поставки)/i
+const UMBRELLA_RE = /(\/approve\s+delivery\b|i approve the delivery|full delivery cycle)/i
 
 function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value)
@@ -196,14 +196,14 @@ const plugin: Plugin = async ({ directory }) => {
   const verifySeal = (kind: "verdicts" | "rework", taskId: string, attempt: number): string | null => {
     const artifactDir = join(dir, PIPELINE, kind)
     const sealPath = join(artifactDir, `${taskId}-a${attempt}.seal`)
-    if (!existsSync(sealPath)) return `нет пломбы ${PIPELINE}/${kind}/${taskId}-a${attempt}.seal`
+    if (!existsSync(sealPath)) return `missing seal ${PIPELINE}/${kind}/${taskId}-a${attempt}.seal`
     const seal = readJson<any>(sealPath, null)
-    if (!seal || typeof seal.files !== "object" || seal.files === null) return "пломба повреждена"
+    if (!seal || typeof seal.files !== "object" || seal.files === null) return "seal is corrupted"
     for (const [name, expected] of Object.entries(seal.files as Record<string, string>)) {
       const path = join(artifactDir, name)
-      if (!existsSync(path)) return `файл ${name} из пломбы отсутствует`
+      if (!existsSync(path)) return `file ${name} from the seal is missing`
       const actual = "sha256:" + createHash("sha256").update(readFileSync(path)).digest("hex")
-      if (actual !== expected) return `файл ${name} изменён после пломбы`
+      if (actual !== expected) return `file ${name} changed after sealing`
     }
     return null
   }
@@ -237,7 +237,7 @@ const plugin: Plugin = async ({ directory }) => {
   const requireApproval = (key: string, op: ApprovalOp, what: string) => {
     const data = readJson<any>(approvalPath(key), null)
     if (!data || typeof data[op] !== "string" || !data[op]) {
-      deny(`нет разрешения человека на ${what} — нужно сообщение «разрешаю ${op}» или /approve ${op}`)
+      deny(`no human approval for ${what} — send "I approve the ${op}" or /approve ${op}`)
     }
   }
 
@@ -280,14 +280,14 @@ const plugin: Plugin = async ({ directory }) => {
 
   const checkPush = () => {
     const active = activeState()
-    if (!active) deny("нет активной задачи — push запрещён")
+    if (!active) deny("no active task — push is forbidden")
     const taskId = String(active!.state.task_id ?? "")
     const branch = currentBranch()
-    if (branch !== `task/${taskId}`) deny(`push разрешён только с ветки task/${taskId}, текущая: ${branch || "неизвестна"}`)
+    if (branch !== `task/${taskId}`) deny(`push is only allowed from branch task/${taskId}, current: ${branch || "unknown"}`)
     requireApproval(taskId, "push", "push")
     const head = headCommit()
     if (!head || head !== active!.state.delivered_commit) {
-      deny("push только проверенного коммита: HEAD не совпадает с delivered_commit")
+      deny("push only of a verified commit: HEAD does not match delivered_commit")
     }
   }
 
@@ -295,32 +295,32 @@ const plugin: Plugin = async ({ directory }) => {
     const active = activeState()
     const taskId = active ? String(active.state.task_id ?? "") : ""
     if (/\bgh\s+repo\s+create\b/.test(command)) {
-      requireApproval("_repo", "repo", "создание репозитория")
+      requireApproval("_repo", "repo", "repository creation")
       return
     }
     if (/\bgh\s+pr\s+create\b/.test(command)) {
-      if (!active) deny("нет активной задачи для создания PR")
-      requireApproval(taskId, "pr", "создание PR")
+      if (!active) deny("no active task for creating a PR")
+      requireApproval(taskId, "pr", "PR creation")
       const head = headCommit()
       if (!head || head !== active!.state.delivered_commit) {
-        deny("PR только по проверенному коммиту: HEAD не совпадает с delivered_commit")
+        deny("PR only for a verified commit: HEAD does not match delivered_commit")
       }
       return
     }
     if (/\bgh\s+pr\s+merge\b/.test(command)) {
-      if (!active) deny("нет активной задачи для merge")
+      if (!active) deny("no active task for merge")
       requireApproval(taskId, "merge", "merge")
-      if (!active!.state.pr_number) deny("merge только по PR, созданному через пайплайн")
+      if (!active!.state.pr_number) deny("merge only for a PR created through the pipeline")
       return
     }
     if (/\bgh\s+release\s+create\b/.test(command)) {
-      requireApproval(taskId || "_general", "release", "релиз")
-      if (!active || !active.state.merge_commit) deny("релиз только после merge")
+      requireApproval(taskId || "_general", "release", "release")
+      if (!active || !active.state.merge_commit) deny("release only after merge")
       return
     }
-    if (/\bgh\s+workflow\s+run\b/.test(command)) deny("gh workflow run вне мандата")
+    if (/\bgh\s+workflow\s+run\b/.test(command)) deny("gh workflow run is outside the mandate")
     if (/\bgh\s+api\b/.test(command) && /(-X|--method)\s*(POST|PUT|PATCH|DELETE)|(^|\s)-f(\s|$)|mutation/i.test(command)) {
-      deny("мутирующий gh api запрещён")
+      deny("mutating gh api is forbidden")
     }
   }
 
@@ -477,47 +477,47 @@ const plugin: Plugin = async ({ directory }) => {
     if (!raw) return
     const rel = relativeTo(dir, raw)
     const name = rel.split("/").pop() ?? ""
-    if (role === "lead" && !under(rel, PIPELINE)) deny(`лид не правит файлы вне ${PIPELINE}/: ${rel}`)
+    if (role === "lead" && !under(rel, PIPELINE)) deny(`lead does not edit files outside ${PIPELINE}/: ${rel}`)
     if (role === "lead" && under(rel, `${PIPELINE}/verdicts`)) {
-      deny("вердикты — неизменяемые доказательства; лид их создавать и править не может")
+      deny("verdicts are immutable evidence; the lead cannot create or edit them")
     }
     if (role === "lead" && under(rel, `${PIPELINE}/approvals`)) {
-      deny("разрешения человека пишет только плагин — лид их не правит")
+      deny("only the plugin writes human approvals — the lead must not edit them")
     }
     if (role === "lead" && under(rel, `${PIPELINE}/rework`)) {
-      if (!REWORK_FILE.test(name)) deny("rework-пакет должен называться <task>-a<N>.md")
-      if (existsSync(join(dir, rel))) deny("rework-пакет неизменяем после записи: новая попытка — новый номер")
+      if (!REWORK_FILE.test(name)) deny("rework packet must be named <task>-a<N>.md")
+      if (existsSync(join(dir, rel))) deny("rework packet is immutable after it is written: a new attempt uses a new number")
     }
-    if (role === "architect" && !under(rel, `${PIPELINE}/designs`)) deny("архитектор пишет только в .pipeline/designs/")
-    if (role === "developer" && under(rel, PIPELINE)) deny("разработчику запрещено писать в .pipeline/")
+    if (role === "architect" && !under(rel, `${PIPELINE}/designs`)) deny("architect writes only to .pipeline/designs/")
+    if (role === "developer" && under(rel, PIPELINE)) deny("the developer must not write to .pipeline/")
     if (role === "reviewer") {
-      if (!under(rel, `${PIPELINE}/verdicts`)) deny("ревьювер пишет только вердикты в .pipeline/verdicts/")
-      if (!VERDICT_FILE.test(name)) deny("вердикт должен называться <task>-a<N>.md или <task>-a<N>.json")
-      if (existsSync(join(dir, rel))) deny("вердикт уже зафиксирован: попытка неизменяема")
+      if (!under(rel, `${PIPELINE}/verdicts`)) deny("reviewer writes only verdicts to .pipeline/verdicts/")
+      if (!VERDICT_FILE.test(name)) deny("verdict must be named <task>-a<N>.md or <task>-a<N>.json")
+      if (existsSync(join(dir, rel))) deny("verdict is already recorded: an attempt is immutable")
     }
   }
 
   const checkCommit = (command: string) => {
-    if (COMMIT_BANNED.test(command)) deny("коммит с --amend/-a/--patch запрещён")
+    if (COMMIT_BANNED.test(command)) deny("commit with --amend/-a/--patch is forbidden")
     const taskId = command.match(TASK_ID)?.[0]
     if (!taskId) {
-      deny("коммит обязан содержать task_id (T-ГГГГММДД-NN) в сообщении")
+      deny("commit message must contain task_id (T-YYYYMMDD-NN)")
     } else {
       const found = latestVerdict(taskId)
-      if (!found) deny(`нет вердикта ${PIPELINE}/verdicts/<task>-a<N>.json — коммит запрещён`)
-      requireApproval(taskId, "commit", "коммит")
+      if (!found) deny(`no verdict ${PIPELINE}/verdicts/<task>-a<N>.json — commit is forbidden`)
+      requireApproval(taskId, "commit", "commit")
       const verdict = readJson<any>(found.path, null)
-      if (!verdict) deny("вердикт повреждён — коммит запрещён")
+      if (!verdict) deny("verdict is corrupted — commit is forbidden")
       const sealIssue = verifySeal("verdicts", taskId, found.attempt)
-      if (sealIssue) deny(`${sealIssue} — коммит запрещён`)
+      if (sealIssue) deny(`${sealIssue} — commit is forbidden`)
       const seal = readJson<any>(join(dir, PIPELINE, "verdicts", `${taskId}-a${found.attempt}.seal`), null)
       const files = seal?.files ?? {}
       const mdName = `${taskId}-a${found.attempt}.md`
-      if (!(mdName in files)) deny(`вердикт ${mdName} не входит в пломбу — коммит запрещён`)
-      if (verdict.verdict !== "PASS") deny(`вердикт ${verdict.verdict}: коммит запрещён`)
+      if (!(mdName in files)) deny(`verdict ${mdName} is not covered by the seal — commit is forbidden`)
+      if (verdict.verdict !== "PASS") deny(`verdict ${verdict.verdict}: commit is forbidden`)
       const hash = stagedHash()
       if (verdict.candidate_hash !== hash) {
-        deny(`PASS устарел: вердикт ${verdict.candidate_hash}, индекс ${hash} — нужна перепроверка`)
+        deny(`PASS is stale: verdict ${verdict.candidate_hash}, index ${hash} — re-verification required`)
       }
     }
   }
@@ -529,10 +529,10 @@ const plugin: Plugin = async ({ directory }) => {
     const nonRead = subcommands.filter((sub) => !GIT_READ_SUBCOMMANDS.has(sub))
 
     if (role === "lead") {
-      if (BANNED_GIT_REMOTE.test(command)) deny("git remote разрешён только на чтение: `git remote -v` или `git remote show`")
+      if (BANNED_GIT_REMOTE.test(command)) deny("git remote is read-only: `git remote -v` or `git remote show`")
       const foreign = subcommands.filter((sub) => !GIT_LEAD_SUBCOMMANDS.has(sub) && sub !== "commit")
       if (foreign.length > 0) {
-        deny(`лиду разрешены git status/diff/log/show/add/commit/push и работа с ветками, получено: ${foreign.join(", ")}`)
+        deny(`lead may run git status/diff/log/show/add/commit/push and branch operations, got: ${foreign.join(", ")}`)
       }
       if (/\bgh\s+/.test(command)) checkGh(command)
       if (subcommands.includes("commit")) {
@@ -541,61 +541,61 @@ const plugin: Plugin = async ({ directory }) => {
       }
       if (subcommands.includes("push")) checkPush()
       if (WRITE_SIGNAL.test(command) && /verdicts|rework/.test(command)) {
-        deny("доказательства (verdicts/rework) неизменяемы — правка запрещена")
+        deny("evidence (verdicts/rework) is immutable — editing is forbidden")
       }
-      if (WRITE_SIGNAL.test(command) && !command.includes(PIPELINE)) deny("лид пишет файлы только в .pipeline/")
+      if (WRITE_SIGNAL.test(command) && !command.includes(PIPELINE)) deny("lead writes files only to .pipeline/")
       return
     }
 
-    if (/\bgh\s+/.test(command)) deny(`роль ${role} не управляет GitHub`)
-    if (nonRead.length > 0) deny(`git-мутации запрещены роли ${role}: ${nonRead.join(", ")}`)
-    if ((role === "architect" || role === "reviewer") && WRITE_SIGNAL.test(command)) deny(`роль ${role} не выполняет мутирующие команды`)
-    if (role === "developer" && command.includes(PIPELINE)) deny("разработчику запрещён доступ к .pipeline/ через bash")
+    if (/\bgh\s+/.test(command)) deny(`role ${role} does not manage GitHub`)
+    if (nonRead.length > 0) deny(`git mutations are forbidden for role ${role}: ${nonRead.join(", ")}`)
+    if ((role === "architect" || role === "reviewer") && WRITE_SIGNAL.test(command)) deny(`role ${role} must not run mutating commands`)
+    if (role === "developer" && command.includes(PIPELINE)) deny("the developer must not access .pipeline/ via bash")
     if (role === "reviewer" && command.includes(PIPELINE) && !command.includes("candidate-hash.sh")) {
-      deny("ревьюверу в .pipeline/ разрешён только candidate-hash.sh")
+      deny("in .pipeline/ the reviewer may only run candidate-hash.sh")
     }
   }
 
   const checkDispatch = (args: any) => {
     const target: Role | undefined = dispatchTarget(args)
     if (target === undefined) {
-      deny("диспетч обязан указывать роль: settings.modeId или ROLE-маркер")
+      deny("dispatch must specify a role: settings.modeId or the ROLE marker")
     } else {
       const prompt = String(args?.initialPrompt ?? args?.prompt ?? "")
       const taskId = prompt.match(TASK_ID)?.[0]
       if (!taskId) {
-        deny("диспетч обязан содержать task_id вида T-ГГГГММДД-NN")
+        deny("dispatch must contain a task_id of the form T-YYYYMMDD-NN")
       } else {
         if ((target === "developer" || target === "reviewer") && !existsSync(briefFile(taskId))) {
-          deny(`нет брифа ${PIPELINE}/briefs/${taskId}.md — нет диспетча`)
+          deny(`no brief ${PIPELINE}/briefs/${taskId}.md — no dispatch`)
         }
         const state = readJson<any>(stateFile(taskId), null)
         if ((target === "developer" || target === "reviewer") && !state) {
-          deny(`нет состояния ${PIPELINE}/state/${taskId}.json`)
+          deny(`no state ${PIPELINE}/state/${taskId}.json`)
         }
         if (state && target === "reviewer" && state.dispatch_open === true) {
-          deny("кандидат не зафиксирован: перед диспетчем ревьювера зафиксируй снимок через git add")
+          deny("candidate is not frozen: before dispatching the reviewer, freeze the snapshot with git add")
         }
         if (state && target === "architect") {
           const teamPath = join(dir, PIPELINE, "team.json")
           if (existsSync(teamPath)) {
             const team = readJson<any>(teamPath, null)
             const modules = Array.isArray(team?.modules) ? team.modules : []
-            if (!modules.includes("architect")) deny("модуль architect не включён в beach-team.json")
+            if (!modules.includes("architect")) deny("module architect is not enabled in beach-team.json")
           }
         }
         if (state && target === "developer") {
           const decision = String(state.infra_decision ?? "")
-          if (decision === "stop") deny("человек остановил задачу после инфраструктурных отказов")
+          if (decision === "stop") deny("the human stopped the task after infrastructure failures")
           const route = routeOf(state)
           if (!ROUTE_VALUES.has(route)) {
-            deny(`недопустимый route «${route}» — допустимы: full, standard, assisted`)
+            deny(`invalid route "${route}" — allowed: full, standard, assisted`)
           }
           if (route === "assisted") {
-            deny("маршрут assisted: правку вносит человек — диспетч разработчика запрещён")
+            deny("route assisted: the human makes the change — developer dispatch is forbidden")
           }
           if (route === "full" && state.design_approved !== true) {
-            deny("маршрут full требует утверждённого человеком дизайна")
+            deny("route full requires a human-approved design")
           }
           if (state.roadmap_id) {
             const roadmapPath = join(dir, PIPELINE, "roadmap.json")
@@ -603,25 +603,25 @@ const plugin: Plugin = async ({ directory }) => {
               const roadmap = readJson<any>(roadmapPath, null)
               const nodes: any[] = Array.isArray(roadmap?.nodes) ? roadmap.nodes : []
               const node = nodes.find((item) => item?.id === state.roadmap_id)
-              if (!node) deny(`узел roadmap «${state.roadmap_id}» не найден в ${PIPELINE}/roadmap.json`)
+              if (!node) deny(`roadmap node "${state.roadmap_id}" not found in ${PIPELINE}/roadmap.json`)
               const deps: string[] = Array.isArray(node.depends_on) ? node.depends_on : []
               const undone = deps.filter((id) => {
                 const dep = nodes.find((item) => item?.id === id)
                 return !dep || String(dep.status) !== "done"
               })
-              if (undone.length > 0) deny(`roadmap: не завершены зависимости ${undone.join(", ")} — диспетч запрещён`)
+              if (undone.length > 0) deny(`roadmap: unfinished dependencies ${undone.join(", ")} — dispatch is forbidden`)
             }
           }
           const max = Number(state.max_attempts ?? 3)
           const used = Number(state.attempts ?? 0)
           if (used >= max) {
-            deny(`бюджет попыток исчерпан (${used}/${max}; попытка = зафиксированный кандидат) — эскалация человеку`)
+            deny(`attempt budget exhausted (${used}/${max}; an attempt = a frozen candidate) — escalate to the human`)
           }
           const maxInfra = Number(state.max_infra_failures ?? 4)
           const infra = Number(state.infra_failures ?? 0)
           const prospective = infra + (state.dispatch_open === true ? 1 : 0)
           if (prospective >= maxInfra && decision !== "continue" && decision !== "replace") {
-            deny(`инфраструктурных отказов ${prospective} из ${maxInfra} — нужно решение человека: продолжить, заменить исполнителя или остановить`)
+            deny(`infrastructure failures ${prospective} of ${maxInfra} — a human decision is required: continue, replace the executor, or stop`)
           }
         }
       }

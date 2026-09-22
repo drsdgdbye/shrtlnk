@@ -1,72 +1,72 @@
-# PIPELINE: протокол команды beach-team
+# PIPELINE: the beach-team protocol
 
-Действует в продуктовом репозитории, куда развёрнут контур (`scripts/render-team.py`).
-Конфигурация — `beach-team.json`; резолв для диспетча — `.pipeline/team.json`.
+Applies in the product repository where the harness is deployed (`scripts/render-team.py`).
+Configuration — `beach-team.json`; resolution for dispatch — `.pipeline/team.json`.
 
-## 0. Конфигурация команды
+## 0. Team configuration
 
-- Стек: `go`.
-- Ядро (всегда): lead, developer, reviewer. Модули: architect.
-- Маршруты по умолчанию: feature → full, fix → standard, chore → standard.
-- Обязательные проверки проекта:
+- Stack: `go`.
+- Core (always): lead, developer, reviewer. Modules: architect.
+- Default routes: feature → full, fix → standard, chore → standard.
+- Required project checks:
 - `gofmt -l .`
 - `go vet ./...`
 - `go build ./...`
 - `go test ./...`
 - `go test -race ./...`
 
-## 1. Маршрут
+## 1. Route
 
 ```
 GOAL → DESIGN → APPROVAL → BRIEF → DISPATCH → VERIFY → ACCEPT → COMMIT
                                      ↑            │
-                                     └── REWORK ←─┘   (≤ 3 попытки)
-GAP / бюджет / таймаут → ESCALATE
+                                     └── REWORK ←─┘   (≤ 3 attempts)
+GAP / budget / timeout → ESCALATE
 ```
 
-| Состояние | Событие | Условие | Новое состояние |
+| State | Event | Condition | New state |
 |---|---|---|---|
-| GOAL | задача принята, `task_id` присвоен | тип задачи определён | DESIGN (фича) или BRIEF |
-| DESIGN | дизайн готов | `.pipeline/designs/<task_id>.md` записан | APPROVAL |
-| APPROVAL | решение человека | «утверждаю» получено | BRIEF |
-| BRIEF | бриф записан | обязательные поля заполнены | DISPATCH |
-| DISPATCH | разработчик запущен | бриф + маршрут + (для `full`) утверждённый дизайн + бюджет | RUNNING |
-| RUNNING | разработчик вернул результат | изменения внесены, проверки прогнаны | VERIFYING |
-| VERIFYING | вердикт ревьювера | PASS на актуальном хеше | ACCEPTED |
-| VERIFYING | вердикт ревьювера | FAIL, попытка < 3 | REWORK |
-| VERIFYING | вердикт ревьювера | FAIL, попытка = 3 | ESCALATED |
-| VERIFYING | вердикт ревьювера | INCONCLUSIVE | перепроверка или ESCALATED |
-| ACCEPTED | коммит лида | хеш вердикта = хеш индекса | COMMITTED |
-| любое активное | таймаут 60 мин | — | TIMED_OUT (инфраструктурный отказ) → повтор до 4 |
+| GOAL | task accepted, `task_id` assigned | task type determined | DESIGN (feature) or BRIEF |
+| DESIGN | design ready | `.pipeline/designs/<task_id>.md` written | APPROVAL |
+| APPROVAL | human decision | "I approve" received | BRIEF |
+| BRIEF | brief written | mandatory fields filled | DISPATCH |
+| DISPATCH | developer launched | brief + route + (for `full`) approved design + budget | RUNNING |
+| RUNNING | developer returned a result | changes made, checks run | VERIFYING |
+| VERIFYING | reviewer verdict | PASS on the current hash | ACCEPTED |
+| VERIFYING | reviewer verdict | FAIL, attempt < 3 | REWORK |
+| VERIFYING | reviewer verdict | FAIL, attempt = 3 | ESCALATED |
+| VERIFYING | reviewer verdict | INCONCLUSIVE | re-verification or ESCALATED |
+| ACCEPTED | lead commit | verdict hash = index hash | COMMITTED |
+| any active | timeout 60 min | — | TIMED_OUT (infrastructure failure) → retry up to 4 |
 
-Статус ведёт лид в `.pipeline/state/<task_id>.json`. Отсутствие статуса — не «почти готово», а
-отсутствие состояния.
+The lead maintains the status in `.pipeline/state/<task_id>.json`. Absence of status is not "almost
+ready" but absence of state.
 
-### 1.1. Классы задач и маршруты
+### 1.1. Task classes and routes
 
-- `feature` — по умолчанию маршрут `full` (архитектор → разработчик → ревьювер); при выключенном
-  модуле архитектора или по слову человека — `standard`.
-- `fix` — точечное исправление: маршрут `standard` (разработчик → ревьювер), бриф минимальный, но
-  обязательный; ревьювер проверяет узкий критерий и отсутствие побочных изменений.
-- `chore` — конфигурация, документация, инфраструктура репозитория; требования как у `fix`.
-- `assisted` — правку вносит человек, ревьювер проверяет, лид коммитит. Включается словами
-  «правлю сам», «без разработчика», `/assisted`; диспетч разработчика в этом маршруте запрещён
-  плагином, а зафиксированный человеком снимок считается попыткой.
+- `feature` — by default the `full` route (architect → developer → reviewer); with the architect
+  module disabled or by the human's word ("skip the architect") — `standard`.
+- `fix` — a point fix: the `standard` route (developer → reviewer), the brief is minimal but
+  mandatory; the reviewer checks the narrow criterion and the absence of side changes.
+- `chore` — configuration, documentation, repository infrastructure; requirements as for `fix`.
+- `assisted` — the human makes the edit, the reviewer verifies, the lead commits. Enabled by the words
+  "I'll fix it myself", "without the developer", `/assisted`; developer dispatch on this route is forbidden
+  by the plugin, and a snapshot fixed by the human counts as an attempt.
 
-Лёгкий трек не отменяет гейтов: `task_id`, бриф, независимая проверка и коммит по актуальному PASS
-действуют. Обязательные проверки — из `checks` в `beach-team.json`.
+The light track does not cancel the gates: `task_id`, brief, independent verification and commit by the current PASS
+apply. Required checks — from `checks` in `beach-team.json`.
 
-## 2. Каталоги и идентификаторы
+## 2. Directories and identifiers
 
 ```
 .pipeline/
 ├── designs/<task_id>.md
 ├── briefs/<task_id>.md
-├── verdicts/<task_id>-a<N>.md      человекочитаемый вердикт попытки
-├── verdicts/<task_id>-a<N>.json    машинный вердикт для гейта коммита
-├── verdicts/<task_id>-a<N>.seal    пломба хешей файлов попытки
-├── rework/<task_id>-a<N>.md        пакет на доработку
-├── rework/<task_id>-a<N>.seal      пломба пакета
+├── verdicts/<task_id>-a<N>.md      human-readable verdict of the attempt
+├── verdicts/<task_id>-a<N>.json    machine verdict for the commit gate
+├── verdicts/<task_id>-a<N>.seal    seal of the attempt's file hashes
+├── rework/<task_id>-a<N>.md        rework packet
+├── rework/<task_id>-a<N>.seal      seal of the packet
 ├── state/<task_id>.json
 ├── tools/candidate-hash.sh
 ├── templates/
@@ -74,163 +74,163 @@ GAP / бюджет / таймаут → ESCALATE
 └── pipeline-log.md
 ```
 
-- `task_id` — `T-ГГГГММДД-NN` (например, `T-20260919-01`), присваивает лид.
+- `task_id` — `T-YYYYMMDD-NN` (for example, `T-20260919-01`), assigned by the lead.
 - `attempt_id` — `<task_id>-a<N>`, N = 1..3.
-- `finding_id` — `F-<номер>` в пределах вердикта.
-- Бриф правит только лид и только до диспетча. Исправление ошибки брифа после FAIL оформляется
-  как `brief v2` с пометкой в state; старый вердикт аннулируется.
+- `finding_id` — `F-<number>` within the verdict.
+- The brief is edited only by the lead and only before dispatch. Fixing a brief error after FAIL is formalized
+  as `brief v2` with a note in state; the old verdict is annulled.
 
-## 3. Кандидат и хеш
+## 3. Candidate and hash
 
-- Кандидат — рабочее дерево. Лид фиксирует его: `git add -A -- . ':(exclude).pipeline'`.
-- Хеш кандидата: `.pipeline/tools/candidate-hash.sh` → `sha256:<hex>` от
+- The candidate is the working tree. The lead fixes it: `git add -A -- . ':(exclude).pipeline'`.
+- Candidate hash: `.pipeline/tools/candidate-hash.sh` → `sha256:<hex>` of
   `git diff --cached --binary -- . ':(exclude).pipeline'`.
-- Ревьювер проверяет именно зафиксированный кандидат и указывает хеш в вердикте.
-- Любая правка после фиксации меняет индекс или дерево → старый хеш перестаёт совпадать, PASS
-  теряет силу.
-- Коммит выполняет только лид: `git commit -m "<task_id>: <суть>"`. Гейт плагина берёт **последнюю
-  попытку**, требует `PASS`, совпадения хеша с индексом и валидной пломбы файлов вердикта; при
-  расхождении commit запрещён. `--amend`, `-a`, `--patch` запрещены.
-- Index — один слот поставки: одновременно в активной работе одна задача на репозиторий.
-  Параллельные задачи появятся вместе с worktrees (этап 2); до этого не запускай вторую.
+- The reviewer verifies exactly the fixed candidate and specifies the hash in the verdict.
+- Any edit after fixation changes the index or the tree → the old hash stops matching, PASS
+  loses force.
+- Only the lead performs the commit: `git commit -m "<task_id>: <summary>"`. The plugin gate takes the **latest
+  attempt**, requires `PASS`, a hash match with the index and a valid seal of the verdict files; on
+  mismatch commit is forbidden. `--amend`, `-a`, `--patch` are forbidden.
+- Index is a single delivery slot: one task per repository is in active work at a time.
+  Parallel tasks will appear together with worktrees (stage 2); until then, do not start a second one.
 
-## 4. Бюджеты и инфраструктурные отказы
+## 4. Budgets and infrastructure failures
 
-- Попытка = зафиксированный кандидат. Счётчик `attempts` увеличивается, когда лид фиксирует
-  снимок (`git add` с новым хешем); предел — 3 попытки на задачу. Смена агента счётчик не сбрасывает.
-- Инфраструктурный отказ — сбой провайдера, оборванный запуск или таймаут без кандидата. Он не
-  расходует попытку: плагин считает такие случаи отдельно (`infra_failures`) и после 4 отказов
-  запрещает диспатч разработчика.
-- После 4 инфраструктурных отказов решение принимает человек: **продолжить**, **заменить
-  исполнителя** или **остановить**. Решение фиксируется в state (`infra_decision`); при `replace`
-  меняется исполнитель (`executor`), при `stop` задача эскалируется. После первого разрешённого
-  диспетча счётчик отказов сбрасывается, решение уходит в `infra_decision_history`.
-- Таймаут диспатча: 60 минут. Лид выясняет состояние агента и при зависании отменяет его
-  (`paseo_cancel_agent`); таймаут без кандидата — тот же инфраструктурный отказ.
-- Таймаут и INCONCLUSIVE — не FAIL: они не доказывают дефект, но и не разрешают выпуск.
+- An attempt = a fixed candidate. The `attempts` counter increases when the lead fixes a
+  snapshot (`git add` with a new hash); the limit is 3 attempts per task. Changing the agent does not reset the counter.
+- An infrastructure failure is a provider failure, an interrupted run or a timeout without a candidate. It does not
+  consume an attempt: the plugin counts such cases separately (`infra_failures`) and after 4 failures
+  forbids developer dispatch.
+- After 4 infrastructure failures the human makes the decision: **continue**, **replace the executor**
+  or **stop**. The decision is recorded in state (`infra_decision`); on `replace`
+  the executor changes (`executor`), on `stop` the task is escalated. After the first allowed
+  dispatch the failure counter is reset, the decision goes to `infra_decision_history`.
+- Dispatch timeout: 60 minutes. The lead finds out the agent's state and, if it hangs, cancels it
+  (`paseo_cancel_agent`); a timeout without a candidate is the same infrastructure failure.
+- A timeout and INCONCLUSIVE are not FAIL: they do not prove a defect, but they do not permit release either.
 
-## 5. Маршрутизация находок
+## 5. Finding routing
 
-- Находка в текущем диффе → немедленный фикс через rework-пакет.
-- Находка в чужом/старом коде → в батч-эскалацию человеку: файл
-  `.pipeline/findings/<task_id>-F<N>-<слаг>.md` по шаблону `.pipeline/templates/finding.md`
-  (severity, доказательства, воспроизведение, рекомендация). В дифф задачи такая находка не
-  включается, rework по ней не собирается; решение о приоритете — за человеком.
-- Обязательное поле находки «Источник доказательства»: `воспроизведено` (проба реально запускалась,
-  в scratch-каталоге вне репозитория) или `по чтению кода`; заявлять «воспроизведено» без запуска
-  запрещено.
-- Находка старого кода не меняет вердикт кандидата: вердикт — по критериям брифа.
-- **Дефект брифа** (находка владельца «лид»: противоречие критериев, критерий недостижим в
-  области): вердикт не отменяется и не правится — он остаётся доказательством своей попытки,
-  попытка расходуется. Лид выпускает бриф v(N+1) с исправлением, фиксирует в state `brief_version`
-  и `superseded_verdicts` (с причиной), вносит дифф критериев в журнал и рапортует человеку;
-  кандидат не откатывается, следующая попытка проверяется по новому брифу.
-- **Возражение исполнителя**: «не подтверждена» в rework-отчёте допустима только с доказательством
-  (воспроизведение, ссылки на код/тесты). Лид не решает технический спор по существу, не требует
-  правок вне брифа или разрешённой области и не принимает работу без свежего PASS. Если возражение
-  и вердикт несовместимы — эскалация человеку: обе позиции, доказательства, варианты (остановить,
-  заменить исполнителя, перевыпустить бриф, перепроверить свежим ревьювером).
-- **Запрещено** объявлять вердикт «аннулированным», удалять или править файлы вердиктов: история
-  вердиктов сохраняется полностью.
-- Исключение: дефект делает текущую поставку небезопасной или блокирует проверку — работа
-  останавливается в этой части и решается человеком.
+- A finding in the current diff → an immediate fix via the rework packet.
+- A finding in someone else's/legacy code → to a batch escalation to the human: the file
+  `.pipeline/findings/<task_id>-F<N>-<slug>.md` according to the template `.pipeline/templates/finding.md`
+  (severity, evidence, reproduction, recommendation). Such a finding is not included in the task diff,
+  rework is not assembled for it; the priority decision is up to the human.
+- Mandatory finding field "Evidence source": `reproduced` (the probe was actually run,
+  in a scratch directory outside the repository) or `by code reading`; claiming "reproduced" without a run
+  is forbidden.
+- A legacy-code finding does not change the candidate verdict: the verdict is according to the brief's criteria.
+- **Brief defect** (a finding with owner "lead": contradiction of criteria, a criterion unattainable in the
+  scope): the verdict is not annulled and not edited — it remains evidence of its attempt,
+  the attempt is consumed. The lead issues brief v(N+1) with the fix, records in state `brief_version`
+  and `superseded_verdicts` (with the reason), enters the criteria diff into the log and reports to the human;
+  the candidate is not rolled back, the next attempt is verified according to the new brief.
+- **Executor objection**: "not confirmed" in the rework report is admissible only with evidence
+  (reproduction, references to code/tests). The lead does not resolve a technical dispute on the merits, does not demand
+  edits outside the brief or the permitted scope and does not accept work without a fresh PASS. If the objection
+  and the verdict are incompatible — escalation to the human: both positions, evidence, options (stop,
+  replace the executor, reissue the brief, re-verify with a fresh reviewer).
+- It is **forbidden** to declare a verdict "annulled", delete or edit verdict files: the history of
+  verdicts is preserved in full.
+- Exception: a defect makes the current delivery unsafe or blocks verification — work
+  stops in that part and is decided by the human.
 
 ## 6. GAP
 
-Неполная спека, противоречие критериев, денежные и необратимые правила → лид задаёт вопрос
-человеку до диспетча. Молчаливый стаб или догадка запрещены. Открытый вопрос фиксируется в
+An incomplete spec, a contradiction of criteria, monetary and irreversible rules → the lead asks the
+human before dispatch. A silent stub or a guess is forbidden. An open question is recorded in
 state (`open_questions`).
 
-## 7. Эскалация
+## 7. Escalation
 
-Формат: проблема → влияние → собранные доказательства (пути артефактов, хеш, вердикт) →
-варианты продолжения. Канал — уведомление Paseo человеку. Дифф и артефакты сохраняются.
+Format: problem → impact → collected evidence (artifact paths, hash, verdict) →
+continuation options. Channel — a Paseo notification to the human. The diff and artifacts are preserved.
 
-## 8. Ручное вмешательство
+## 8. Manual intervention
 
-Человек может утвердить или отклонить дизайн, ответить на GAP, остановить задачу, а также внести
-правку сам — но тогда она проходит проверку ревьювером и коммит лида, как любое изменение.
+The human can approve or reject the design, answer a GAP, stop the task, and also make an
+edit themselves — but then it passes reviewer verification and lead commit, like any change.
 
-Ревьювера допустимо вызывать напрямую для аудита или вопроса по коду: он read-only, на гейты это
-не влияет. Разработчика напрямую, без `task_id` и брифа, вызвать нельзя — это запрещено плагином.
-Обход гейтов руками не допускается: правка кода после PASS аннулирует вердикт, а коммит без PASS
-отклоняет commit-гейт.
+The reviewer may be invoked directly for an audit or a code question: it is read-only, this
+does not affect the gates. The developer cannot be invoked directly, without a `task_id` and a brief — this is forbidden by the plugin.
+Bypassing gates by hand is not allowed: editing code after PASS annuls the verdict, and a commit without PASS
+is rejected by the commit gate.
 
-## 9. Что механизировано, а что нет
+## 9. What is mechanized and what is not
 
-Полный перечень — `.pipeline/matrix.md`. Коротко: механизированы права записи ролей, «нет
-брифа — нет диспетча», «нет утверждённого дизайна (маршрут `full`) — нет брифа», «маршрут
-`assisted` запрещает диспетч разработчика», «архитектор — только при включённом модуле»,
-«ревьювер только по зафиксированному кандидату», счётчик попыток по кандидату, отдельный счётчик
-инфраструктурных отказов с порогом 4, commit только по последнему запечатанному PASS,
-неизменяемость вердиктов и rework-пакетов, roadmap-зависимости, approvals на поставку.
-Разрешения среды, не покрытые правами ролей, обслуживает человек (Paseo) — это внешний контур:
-хук `permission.ask` в текущей сборке opencode не вызывается, на него не полагаться. На дисциплине ролей: GAP-гейт,
-watchdog, маршрутизация находок, качество брифа и вердикта. Эти пробелы названы, а не молчаливы.
+The full list is `.pipeline/matrix.md`. In short: mechanized are role write rights, "no
+brief — no dispatch", "no approved design (`full` route) — no brief", "the `assisted` route
+forbids developer dispatch", "architect — only when the module is enabled",
+"reviewer only by a fixed candidate", the attempt counter by candidate, a separate
+infrastructure-failure counter with threshold 4, commit only by the latest sealed PASS,
+immutability of verdicts and rework packets, roadmap dependencies, approvals for delivery.
+Environment permissions not covered by role rights are handled by the human (Paseo) — this is an external harness:
+the `permission.ask` hook is not called in the current opencode build, do not rely on it. On role
+discipline: the GAP gate, the watchdog, finding routing, brief and verdict quality. These shortfalls are named, not silent.
 
-## 10. Режим отчётов
+## 10. Report mode
 
-Отчёты лида бывают краткими (по умолчанию) и подробными — для нового или сложного проекта, для
-нового пользователя. Подробный режим включается ключевыми словами в сообщении лиду («подробно»,
-«проще», «eli5», «простыми словами», «для новичка», «разжуй») или командой `/verbose`;
-выключается словами «кратко», «без подробностей», «обычный режим» или `/brief`.
+Lead reports can be brief (by default) or detailed — for a new or complex project, for
+a new user. Detailed mode is enabled by keywords in a message to the lead ("verbose",
+"in detail", "simply", "for a beginner") or by the `/verbose` command;
+it is disabled by "brief", "shorter", "no details", "normal mode" or `/brief`.
 
-Режим залипающий: плагин записывает его в `.pipeline/report-mode` и дублирует в `report_mode`
-активной задачи, лид читает его при старте. Подробный отчёт описывает: что происходит сейчас,
-что уже сделано и что это значит, незнакомые термины, что требуется от человека, что будет
-дальше — простым языком, без жаргона.
+The mode is sticky: the plugin writes it to `.pipeline/report-mode` and duplicates it in `report_mode`
+of the active task, the lead reads it at startup. A detailed report describes: what is happening now,
+what has already been done and what it means, unfamiliar terms, what is required from the human, what comes
+next — in simple language, without jargon.
 
-## 11. Доказательства и пломбы
+## 11. Evidence and seals
 
-- Вердикты и rework-пакеты — неизменяемые доказательства: только создание нового файла, без
-  перезаписи. Пломба (`<task>-a<N>.seal`) фиксирует хеши файлов попытки; правка после пломбы
-  ломает commit-гейт.
-- Вердикт пишет только ревьювер; лид в `.pipeline/verdicts/**` не пишет вообще. Ошибка в вердикте
-  исправляется новой попыткой или сообщением, а не правкой файла.
-- Проверка целостности: `scripts/verify-artifacts.py --target <репозиторий>` (входит в
+- Verdicts and rework packets are immutable evidence: only creating a new file, without
+  overwriting. The seal (`<task>-a<N>.seal`) records the hashes of the attempt's files; an edit after the seal
+  breaks the commit gate.
+- Only the reviewer writes the verdict; the lead does not write in `.pipeline/verdicts/**` at all. An error in a verdict
+  is corrected by a new attempt or by a message, not by editing the file.
+- Integrity check: `scripts/verify-artifacts.py --target <repository>` (part of
   `check-gates.sh`).
 
-## 12. План и roadmap
+## 12. Plan and roadmap
 
-- `.pipeline/roadmap.json` — продуктовый план: узлы `{id, name, status, completion, depends_on,
-  evidence, next_action, blocking_reason}`; статусы `pending | active | blocked | done | cancelled`;
-  `done` только с evidence.
-- Задача связывается с узлом через `roadmap_id` в state. Гейт плагина запрещает диспетч, пока
-  зависимости узла не завершены.
-- На запрос «статус» лид показывает дерево (✅ / 🟡 / ⬜) и абзац «Живое состояние».
+- `.pipeline/roadmap.json` — the product plan: nodes `{id, name, status, completion, depends_on,
+  evidence, next_action, blocking_reason}`; statuses `pending | active | blocked | done | cancelled`;
+  `done` only with evidence.
+- A task is linked to a node via `roadmap_id` in state. The plugin gate forbids dispatch while
+  the node's dependencies are incomplete.
+- On a "status" request the lead shows the tree (✅ / 🟡 / ⬜) and the paragraph "Live state".
 
-## 13. Контекст и жизненные циклы
+## 13. Context and lifecycles
 
-- Разработчик и ревьювер — одна попытка на сессию; новая попытка — свежий агент. После закрытия
-  задачи исполнители архивируются.
-- Архитектор вызывается только на реальную развилку.
-- Лид следит за заполнением контекста: >70% — завершить шаг и передать состояние в файлы; при
-  авто-сжатии или деградации — пересоздание по resume-процедуре (state, roadmap, журнал).
-- Передача состояния — `.pipeline/handoff/<task_id>-<timestamp>.md` по шаблону
-  `.pipeline/templates/handoff.md`; путь фиксируется в state (`handoff_file`). Новый лид
-  возобновляется по разделу Resume, а не по пересказу в чате.
+- Developer and reviewer — one attempt per session; a new attempt — a fresh agent. After the task is closed
+  the executors are archived.
+- The architect is invoked only at a genuine fork.
+- The lead monitors context usage: >70% — finish the step and transfer the state to files; on
+  auto-compaction or degradation — recreation by the resume procedure (state, roadmap, log).
+- State transfer — `.pipeline/handoff/<task_id>-<timestamp>.md` according to the template
+  `.pipeline/templates/handoff.md`; the path is recorded in state (`handoff_file`). The new lead
+  resumes by the Resume section, not by a retelling in chat.
 
-## 14. Поставка и GitHub
+## 14. Delivery and GitHub
 
-Маршрут поставки: `commit → push → PR → merge → release`. **Каждый мутирующий шаг требует
-одновременно:** запечатанного PASS ревьювера, привязанного к доставляемому коммиту, и явного
-разрешения человека (`.pipeline/approvals/<task_id>.json`; файл пишет только плагин).
+Delivery route: `commit → push → PR → merge → release`. **Each mutating step simultaneously requires:**
+a sealed reviewer PASS tied to the delivered commit, and explicit human approval
+(`.pipeline/approvals/<task_id>.json`; the file is written only by the plugin).
 
-- Ветка задачи — `task/<task_id>`; push только с неё и только проверенного коммита
+- The task branch is `task/<task_id>`; push only from it and only of the verified commit
   (`delivered_commit`).
-- `gh pr create` — после push; номер PR пишется в state. Merge по умолчанию:
-  `gh pr merge <n> --squash --delete-branch`; после merge в state пишется `merge_commit`.
-- `gh release create` — только после merge.
-- Bootstrap: `gh repo create` — отдельное разрешение `repo` (`.pipeline/approvals/_repo.json`).
-- Наблюдение CI — read-only (`gh pr checks`, `gh run view/list`) без разрешения; `gh workflow run`
-  и мутирующий `gh api` запрещены.
-- Разрешения: «разрешаю коммит / пуш / pr / merge / релиз / репозиторий», «разрешаю поставку»
-  (= commit + push + pr), команды `/approve <оп>`; отзыв — «отзываю …», `/revoke <оп>`.
-  Отрицания («не коммить») не распознаются: используй отзыв.
+- `gh pr create` — after push; the PR number is written to state. Default merge:
+  `gh pr merge <n> --squash --delete-branch`; after merge `merge_commit` is written to state.
+- `gh release create` — only after merge.
+- Bootstrap: `gh repo create` — a separate `repo` approval (`.pipeline/approvals/_repo.json`).
+- CI monitoring is read-only (`gh pr checks`, `gh run view/list`) without approval; `gh workflow run`
+  and a mutating `gh api` are forbidden.
+- Approvals: "I approve the commit / push / pr / merge / release / repo", "I approve the delivery"
+  (= commit + push + PR), the commands `/approve commit|push|pr|merge|release|repo|delivery`; revocation — "I revoke the commit", `/revoke <op>`.
+  Negations ("don't commit") are not recognized: use the revocation.
 
-## 15. Изменение правил
+## 15. Changing the rules
 
-Правило считается изменённым только после записи в файл: протокол и матрица — в beach-team,
-настройки задачи — в state. Обещание в чате не действует. После изменения конфигурации команды —
-деплой и `check-gates`; проблемы процесса фиксируются в `team/issues.md` (разбор — по команде
-человека).
+A rule is considered changed only after it is written to a file: protocol and matrix — in beach-team,
+task settings — in state. A promise in chat does not count. After a change to the team configuration —
+deployment and `check-gates`; process problems are recorded in `team/issues.md` (analysis — on the human's
+command).
