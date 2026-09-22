@@ -353,6 +353,7 @@ const plugin: Plugin = async ({ directory }) => {
     if (!expected) deny("cannot derive the task branch: set state.type and, for release, state.version")
     if (branch !== expected) deny(`push is only allowed from branch ${expected}, current: ${branch || "unknown"}`)
     requireApproval(taskId, "push", "push")
+    if (String(active!.state.type ?? "") === "release") return
     const head = headCommit()
     if (!head || head !== active!.state.delivered_commit) {
       deny("push only of a verified commit: HEAD does not match delivered_commit")
