@@ -203,6 +203,8 @@ next — in simple language, without jargon.
 
 - Developer and reviewer — one attempt per session; a new attempt — a fresh agent. After the task is closed
   the executors are archived.
+- Agents created outside the roles (drill leads, probes, observer agents) are archived manually when the
+  drill or investigation is closed.
 - The architect is invoked only at a genuine fork.
 - The lead monitors context usage: >70% — finish the step and transfer the state to files; on
   auto-compaction or degradation — recreation by the resume procedure (state, roadmap, log).
