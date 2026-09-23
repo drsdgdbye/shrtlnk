@@ -80,7 +80,7 @@ jobs:
           SHORT_URL_BASE: ${{ secrets.SHORT_URL_BASE }}
           SHRTLNK_IMAGE: ${{ env.IMAGE }}
           # Значение публикации порта приходит из repository variable; дефолт — режим A.
-          HTTP_PUBLISH: ${{ vars.HTTP_PUBLISH || '8080:8080' }}
+          HTTP_PUBLISH: ${{ vars.HTTP_PUBLISH || '127.0.0.1:8080:8080' }}
         run: |
           {
             printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN"
