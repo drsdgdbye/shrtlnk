@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -16,10 +17,15 @@ const (
 	CodeLength = 7
 	// MaxURLLength — максимальная длина принимаемой ссылки после TrimSpace.
 	MaxURLLength = 2048
+	// MaxTitleLength — предельная длина названия короткой ссылки, в рунах.
+	MaxTitleLength = 32
 	// codeAlphabet — base62-алфавит короткого кода.
 	codeAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	// rejectionLimit — граница rejection sampling: 256 - (256 % 62) = 248.
 	rejectionLimit = 248
+	// titleEllipsis — многоточие усечения (U+2026); усечённое название —
+	// первые MaxTitleLength-1 рун плюс этот символ.
+	titleEllipsis = "…"
 )
 
 // Ошибки пакета. Возвращаются через errors.Is.
@@ -37,7 +43,62 @@ type Link struct {
 	Code      string    `json:"code"`
 	UserID    int64     `json:"user_id"`
 	URL       string    `json:"url"`
+	Title     string    `json:"title"` // "" — название не сохранено (загрузка идёт/сбой/его нет/строка до v2)
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Domain возвращает имя хоста URL без порта и без ведущего "www." (без учёта
+// регистра). "" — если URL не разобран, хост пуст или после среза осталась
+// пустая строка. Примеры: "https://blog.example.com/x" → "blog.example.com";
+// "http://www.example.com:8080/x" → "example.com";
+// "https://WWW.Example.COM/x" → "Example.COM";
+// "https://www2.example.com/x" → "www2.example.com";
+// "http://:8080/x", "https://www./x" → "".
+func Domain(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if len(host) >= len("www.") && strings.EqualFold(host[:len("www.")], "www.") {
+		host = host[len("www."):]
+	}
+	return host
+}
+
+// TruncateTitle усекает s до MaxTitleLength рун: длиннее — первые
+// MaxTitleLength-1 рун плюс "…". Ровно MaxTitleLength рун и короче — без
+// изменений; счёт по рунам, не по байтам.
+func TruncateTitle(s string) string {
+	runes := []rune(s)
+	if len(runes) <= MaxTitleLength {
+		return s
+	}
+	return string(runes[:MaxTitleLength-1]) + titleEllipsis
+}
+
+// TitleFor возвращает итоговое название: pageTitle (если после trim непусто),
+// иначе Domain(rawURL), иначе rawURL; результат прогнан через TruncateTitle.
+func TitleFor(pageTitle, rawURL string) string {
+	if pageTitle = strings.TrimSpace(pageTitle); pageTitle != "" {
+		return TruncateTitle(pageTitle)
+	}
+	if domain := Domain(rawURL); domain != "" {
+		return TruncateTitle(domain)
+	}
+	return TruncateTitle(rawURL)
+}
+
+// DisplayTitle возвращает название ссылки для показа: Title; если пусто —
+// Domain(URL); если и он пуст — URL; результат не длиннее MaxTitleLength рун.
+func (l Link) DisplayTitle() string {
+	if l.Title != "" {
+		return TruncateTitle(l.Title)
+	}
+	if domain := Domain(l.URL); domain != "" {
+		return TruncateTitle(domain)
+	}
+	return TruncateTitle(l.URL)
 }
 
 // ValidateURL обрезает пробелы, проверяет длину (1..MaxURLLength) и структуру

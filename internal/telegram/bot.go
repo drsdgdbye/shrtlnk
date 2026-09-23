@@ -21,6 +21,8 @@ type shortenerService interface {
 // чтобы в тестах подменить реального бота.
 type messageSender interface {
 	SendMessage(ctx context.Context, params *tgbot.SendMessageParams) (*models.Message, error)
+	EditMessageText(ctx context.Context, params *tgbot.EditMessageTextParams) (*models.Message, error)
+	AnswerCallbackQuery(ctx context.Context, params *tgbot.AnswerCallbackQueryParams) (bool, error)
 }
 
 // Run запускает Telegram-бота в режиме long-polling и блокируется до отмены ctx.
@@ -51,6 +53,10 @@ func Run(ctx context.Context, token string, svc shortenerService, base string, l
 	b.RegisterHandler(tgbot.HandlerTypeMessageText, "links", tgbot.MatchTypeCommand,
 		func(ctx context.Context, _ *tgbot.Bot, update *models.Update) {
 			h.handleLinks(ctx, update)
+		})
+	b.RegisterHandler(tgbot.HandlerTypeCallbackQueryData, callbackPrefix, tgbot.MatchTypePrefix,
+		func(ctx context.Context, _ *tgbot.Bot, update *models.Update) {
+			h.handleLinksCallback(ctx, update)
 		})
 
 	if _, err := b.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{

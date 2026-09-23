@@ -13,7 +13,7 @@ import (
 )
 
 // schemaVersion — текущая версия схемы БД.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Store — адаптер SQLite. Потокобезопасен за счёт пула database/sql.
 type Store struct {
@@ -58,7 +58,8 @@ func OpenStore(ctx context.Context, path string) (*Store, error) {
 	return store, nil
 }
 
-// migrate создаёт схему при user_version = 0 и отказывается работать с БД новее бинарника.
+// migrate приводит схему БД к schemaVersion: version 0 — новая БД сразу v2,
+// version 1 — добавление колонки title. БД новее бинарника — ошибка запуска.
 func (s *Store) migrate(ctx context.Context) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -76,14 +77,27 @@ func (s *Store) migrate(ctx context.Context) error {
     code       TEXT    NOT NULL,
     user_id    INTEGER NOT NULL,
     url        TEXT    NOT NULL,
+    title      TEXT    NOT NULL DEFAULT '',
     created_at TEXT    NOT NULL,
     UNIQUE (code),
     UNIQUE (user_id, url)
 );`
 	const createIndex = `CREATE INDEX IF NOT EXISTS idx_links_user_id_id ON links (user_id, id);`
-	const setVersion = `PRAGMA user_version = 1;`
+	const addTitle = `ALTER TABLE links ADD COLUMN title TEXT NOT NULL DEFAULT '';`
+	const setVersion = `PRAGMA user_version = 2;`
 
-	for _, stmt := range []string{createTable, createIndex, setVersion} {
+	var stmts []string
+	switch version {
+	case 0:
+		stmts = []string{createTable, createIndex}
+	case 1:
+		stmts = []string{addTitle}
+	default:
+		return fmt.Errorf("версия схемы БД %d не поддерживается", version)
+	}
+	stmts = append(stmts, setVersion)
+
+	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("миграция схемы БД: %w", err)
 		}
@@ -101,13 +115,13 @@ func (s *Store) Close() error {
 
 // FindUserURL возвращает ссылку пользователя userID с точным URL url или ErrNotFound.
 func (s *Store) FindUserURL(ctx context.Context, userID int64, url string) (Link, error) {
-	const query = `SELECT code, user_id, url, created_at FROM links WHERE user_id = ? AND url = ?`
+	const query = `SELECT code, user_id, url, title, created_at FROM links WHERE user_id = ? AND url = ?`
 	return s.scanLink(ctx, query, userID, url)
 }
 
 // Resolve возвращает ссылку по коду или ErrNotFound.
 func (s *Store) Resolve(ctx context.Context, code string) (Link, error) {
-	const query = `SELECT code, user_id, url, created_at FROM links WHERE code = ?`
+	const query = `SELECT code, user_id, url, title, created_at FROM links WHERE code = ?`
 	return s.scanLink(ctx, query, code)
 }
 
@@ -127,7 +141,7 @@ func (s *Store) CodeExists(ctx context.Context, code string) (bool, error) {
 
 // ByUser возвращает ссылки пользователя в порядке создания (ORDER BY id ASC).
 func (s *Store) ByUser(ctx context.Context, userID int64) ([]Link, error) {
-	const query = `SELECT code, user_id, url, created_at FROM links WHERE user_id = ? ORDER BY id ASC`
+	const query = `SELECT code, user_id, url, title, created_at FROM links WHERE user_id = ? ORDER BY id ASC`
 	rows, err := s.db.QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("выборка ссылок пользователя: %w", err)
@@ -150,15 +164,26 @@ func (s *Store) ByUser(ctx context.Context, userID int64) ([]Link, error) {
 
 // Insert сохраняет новую ссылку. Нарушение UNIQUE возвращается ошибкой.
 func (s *Store) Insert(ctx context.Context, link Link) error {
-	const query = `INSERT INTO links (code, user_id, url, created_at) VALUES (?, ?, ?, ?)`
+	const query = `INSERT INTO links (code, user_id, url, title, created_at) VALUES (?, ?, ?, ?, ?)`
 	_, err := s.db.ExecContext(ctx, query,
 		link.Code,
 		link.UserID,
 		link.URL,
+		link.Title,
 		link.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return fmt.Errorf("вставка ссылки: %w", err)
+	}
+	return nil
+}
+
+// SetTitleIfEmpty записывает title только если текущее название пустое.
+// Ошибка — только при сбое БД; 0 изменённых строк — нормальная ситуация (гонка/пусто).
+func (s *Store) SetTitleIfEmpty(ctx context.Context, code, title string) error {
+	const query = `UPDATE links SET title = ? WHERE code = ? AND title = ''`
+	if _, err := s.db.ExecContext(ctx, query, title, code); err != nil {
+		return fmt.Errorf("сохранение заголовка ссылки %q: %w", code, err)
 	}
 	return nil
 }
@@ -182,7 +207,7 @@ func scanRow(scan func(dest ...any) error) (Link, error) {
 		link      Link
 		createdAt string
 	)
-	if err := scan(&link.Code, &link.UserID, &link.URL, &createdAt); err != nil {
+	if err := scan(&link.Code, &link.UserID, &link.URL, &link.Title, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Link{}, err
 		}
