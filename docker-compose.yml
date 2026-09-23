@@ -8,7 +8,7 @@ services:
       HTTP_ADDR: ":8080"
       DATA_FILE: /data/links.db
     ports:
-      - "${HTTP_PUBLISH:-8080:8080}"
+      - "${HTTP_PUBLISH:-127.0.0.1:8080:8080}"
     volumes:
       - shrtlnk-data:/data
 
