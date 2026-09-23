@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "profile_fingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "accepted_clusters": [
+    {
+      "kind": "semantic",
+      "tier": "main",
+      "fingerprint": "sha256:37356b44336a458b623e35dfbc3127c987bebf58daeb6583e63ea63e9ea6afbf",
+      "members": [
+        {
+          "fingerprint": "sha256:6039e50e63c5d85796e7b47b66d61b512d69515bebc7ccef1211db6ecd36d17a",
+          "path": "core/a.py",
+          "symbol": "render",
+          "body_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "ordinal": 1
+        },
+        {
+          "fingerprint": "sha256:83632469310e8186cd867d626df820f75eefe1241272e8cea543547926566b54",
+          "path": "core/b.py",
+          "symbol": "build",
+          "body_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "ordinal": 1
+        }
+      ],
+      "classification": "intentional-similarity",
+      "reason": "The functions serve different external contracts, so their similarity is intentional.",
+      "owner": "backend"
+    },
+    {
+      "kind": "exact",
+      "tier": "exact",
+      "fingerprint": "sha256:2b88d78b6a4e8da64d128a34d09582fa1a7e0d3cfbfde0328214567dad20282d",
+      "members": [
+        {
+          "fingerprint": "sha256:502e7cebdbc0ff7d6f0ba814c371a55d236daee2199e9d0fd95eeae65e8e4555",
+          "path": "core/c.py",
+          "symbol": "same",
+          "body_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "ordinal": 1
+        },
+        {
+          "fingerprint": "sha256:85c9f5a665ead43bfb81d6598ad36d776497eee0102f731490e3c9f069661421",
+          "path": "core/d.py",
+          "symbol": "same_copy",
+          "body_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "ordinal": 1
+        }
+      ],
+      "classification": "accepted-existing-debt",
+      "reason": "The exact match is recorded as existing debt with a dedicated remediation owner.",
+      "owner": "backend"
+    }
+  ]
+}

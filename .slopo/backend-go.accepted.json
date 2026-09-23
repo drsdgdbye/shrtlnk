@@ -1,0 +1,89 @@
+{
+  "accepted_clusters": [
+    {
+      "classification": "low-signal",
+      "fingerprint": "sha256:02038893bcd1acafd557d14ed28ffb40bcd3ed2e5d89f52aa426a8f396e9bdc8",
+      "kind": "semantic",
+      "members": [
+        {
+          "body_hash": "95e05c83a5d66943e9af24836abc27a4f2ba45651d8df1059865b1efd5d2e8de",
+          "fingerprint": "sha256:65801919963c1b526c47d3708ec6a5bfc0df0f236bf7a12dd4edf9cfc8beb64c",
+          "ordinal": 1,
+          "path": "telegram/bot.go",
+          "symbol": "<unknown>"
+        },
+        {
+          "body_hash": "d4bad257d61dc547a30ac2d096c5359759aaf57a6aefa05bfc59ec9959bb370d",
+          "fingerprint": "sha256:aca8fa75bfcf868b1a8cd78fed3ed30719a0e7a037c5ddf558139464582bd1fa",
+          "ordinal": 1,
+          "path": "telegram/bot.go",
+          "symbol": "<unknown>"
+        }
+      ],
+      "owner": "internal/telegram",
+      "reason": "Короткие замыкания-регистраторы обработчиков с разными колбэками; общего правила нет, вынос в helper только добавил бы косвенность.",
+      "tier": "loose"
+    },
+    {
+      "classification": "low-signal",
+      "fingerprint": "sha256:210250940acdc12c0f2fb8b7092a1a146f189ef22002c4613c8b6c4c728f6e3a",
+      "kind": "semantic",
+      "members": [
+        {
+          "body_hash": "95e05c83a5d66943e9af24836abc27a4f2ba45651d8df1059865b1efd5d2e8de",
+          "fingerprint": "sha256:65801919963c1b526c47d3708ec6a5bfc0df0f236bf7a12dd4edf9cfc8beb64c",
+          "ordinal": 1,
+          "path": "telegram/bot.go",
+          "symbol": "<unknown>"
+        },
+        {
+          "body_hash": "d4bad257d61dc547a30ac2d096c5359759aaf57a6aefa05bfc59ec9959bb370d",
+          "fingerprint": "sha256:aca8fa75bfcf868b1a8cd78fed3ed30719a0e7a037c5ddf558139464582bd1fa",
+          "ordinal": 1,
+          "path": "telegram/bot.go",
+          "symbol": "<unknown>"
+        }
+      ],
+      "owner": "internal/telegram",
+      "reason": "Короткие замыкания-регистраторы обработчиков с разными колбэками; общего правила нет, вынос в helper только добавил бы косвенность.",
+      "tier": "main"
+    }
+  ],
+  "profile_fingerprint": "sha256:c0917d84bfcf7e33593ae6d052a3029bdf9cf4302f88aacff55ff01c5320e73a",
+  "schema_version": 2,
+  "source_content_digest": "sha256:a86df5eb940066e427bdebb814213b96c4410c232248575f3f6d124b4b046e15",
+  "source_dirty": true,
+  "source_revision": "1996475887f1d773511b7b68e0f7b1c8137eb4de",
+  "source_scope_paths": [
+    "internal/pagetitle/extract.go",
+    "internal/pagetitle/pagetitle.go",
+    "internal/pagetitle/transport.go",
+    "internal/redirect/server.go",
+    "internal/shortener/link.go",
+    "internal/shortener/service.go",
+    "internal/shortener/store.go",
+    "internal/telegram/bot.go",
+    "internal/telegram/format.go",
+    "internal/telegram/handlers.go"
+  ],
+  "source_status": [
+    " M .gitignore",
+    "?? .slopo/backend-go-loose.yaml",
+    "?? .slopo/backend-go-toolchain.json",
+    "?? .slopo/backend-go.accepted.json",
+    "?? .slopo/backend-go.ignore.txt",
+    "?? .slopo/backend-go.yaml",
+    "?? tools/slopo_harness.sh",
+    "?? tools/slopo_harness/__init__.py",
+    "?? tools/slopo_harness/fixtures/semantic_duplication_ratchet/accepted.json",
+    "?? tools/slopo_harness/fixtures/semantic_duplication_ratchet/current.json",
+    "?? tools/slopo_harness/fixtures/semantic_duplication_ratchet/loose-report/index.md",
+    "?? tools/slopo_harness/fixtures/semantic_duplication_ratchet/main-report/cluster-1.md",
+    "?? tools/slopo_harness/fixtures/semantic_duplication_ratchet/main-report/index.md",
+    "?? tools/slopo_harness/fixtures/semantic_duplication_ratchet/native.sql",
+    "?? tools/slopo_harness/ratchet.py",
+    "?? tools/slopo_harness/test_ratchet.py"
+  ],
+  "source_status_digest": "sha256:c2ba0717531984ede1ff18dc7f1cd16c33f6d11dd1903d14f666cea99ef82c89",
+  "source_status_truncated": false
+}

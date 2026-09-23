@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "profile_fingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_dirty": false,
+  "source_status": [],
+  "source_status_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source_status_truncated": false,
+  "source_scope_paths": [
+    "core/a.py",
+    "core/b.py",
+    "core/c.py",
+    "core/d.py"
+  ],
+  "source_content_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "clusters": [
+    {
+      "kind": "semantic",
+      "tier": "main",
+      "members": [
+        {
+          "path": "core/a.py",
+          "symbol": "render",
+          "body_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "ordinal": 1
+        },
+        {
+          "path": "core/b.py",
+          "symbol": "build",
+          "body_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "ordinal": 1
+        }
+      ]
+    },
+    {
+      "kind": "exact",
+      "tier": "exact",
+      "members": [
+        {
+          "path": "core/c.py",
+          "symbol": "same",
+          "body_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "ordinal": 1
+        },
+        {
+          "path": "core/d.py",
+          "symbol": "same_copy",
+          "body_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "ordinal": 1
+        }
+      ]
+    }
+  ]
+}

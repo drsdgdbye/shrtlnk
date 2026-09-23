@@ -11,3 +11,5 @@
 /beach-team.json
 /opencode.json
 # <<< beach-team local tooling <<<
+.slopo/local/
+tools/slopo_harness/__pycache__/
