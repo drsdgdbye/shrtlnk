@@ -1,6 +1,10 @@
+.slopo/local/
+tools/slopo_harness/__pycache__/
+
 # >>> beach-team local tooling (do not commit) >>>
 /.opencode/agent/architect.md
 /.opencode/agent/developer.md
+/.opencode/agent/dup-verifier.md
 /.opencode/agent/lead.md
 /.opencode/agent/reviewer.md
 /.opencode/node_modules/
@@ -11,5 +15,3 @@
 /beach-team.json
 /opencode.json
 # <<< beach-team local tooling <<<
-.slopo/local/
-tools/slopo_harness/__pycache__/
