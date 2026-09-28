@@ -1,0 +1,20 @@
+# Profile backend-go defines one cohesive production-code scope and runs from the repository root.
+source_dir: "internal"
+
+source_dir_exclude:
+  - "**/*_test.go"
+
+source_extensions:
+  - ".go"
+  - ".py"
+
+db_file: ".slopo/local/backend-go.db"
+report_dir: ".slopo/local/backend-go-report-loose"
+ignore_file: ".slopo/backend-go.ignore.txt"
+
+embedding_model: "ollama/unclemusclez/jina-embeddings-v2-base-code"
+embedding_dimensions: 768
+
+similarity_threshold: 0.88
+rerank_threshold: 0.92
+body_node_count_threshold: 8

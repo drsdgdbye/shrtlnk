@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "slopo": {
+    "version": "0.5.1",
+    "git_revision": "1d6bb7d5bd47d7b9d1567269c0f3d16b49baa53a",
+    "git_origin": "https://github.com/z0rgoyok/slopo.git",
+    "source_env": "SLOPO_SOURCE",
+    "default_source_relative_to_repository": "../../slopo"
+  },
+  "ollama": {
+    "slopo_model": "ollama/unclemusclez/jina-embeddings-v2-base-code",
+    "installed_model": "unclemusclez/jina-embeddings-v2-base-code:latest",
+    "model_digest": "9fe680d4d58b475099d91e0d08a1eaea6cef087b0a0770f4165581a7e366afec",
+    "url_env": "OLLAMA_API_BASE",
+    "default_url": "http://127.0.0.1:11434"
+  },
+  "runtime": {
+    "native_timeouts_seconds": {
+      "show-config": 30,
+      "index": 120,
+      "embed": 900,
+      "analyze": 300
+    },
+    "scope_probe_timeout_seconds": 30,
+    "native_command_output_max_bytes": 4194304
+  },
+  "profiles": {
+    "main": {
+      "path": ".slopo/backend-go.yaml",
+      "sha256": "5753816de33464743b79b252acd3d5650f76bce821fb99dd024035f1b28af5ee"
+    },
+    "loose": {
+      "path": ".slopo/backend-go-loose.yaml",
+      "sha256": "08eb5946af1f0c915e0ff58193fc3a6623808dc06659dc037ff4984949a490ba"
+    }
+  },
+  "evidence": {
+    "max_findings": 50,
+    "max_bytes": 262144
+  }
+}
